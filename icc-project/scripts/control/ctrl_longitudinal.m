@@ -15,6 +15,7 @@ function [forceCmd, ctrlState] = ctrl_longitudinal(vxRef, vx, ax, ctrlState, CTR
 %   Outputs:
 %       forceCmd.Fx_total   - 총 종방향 힘 요구 [N], 양수 가속 / 음수 제동
 %       forceCmd.brakeRatio - 제동 비율 (0: 가속, 1: 전제동) — 차후 coordinator 가 brake 토크로 변환
+%       forceCmd.brakeAssistRatio - 외부 직진 제동 시 추가 제동 요청 비율
 %       ctrlState           - 업데이트
 %
 %   요구사항:
@@ -137,10 +138,19 @@ function [forceCmd, ctrlState] = ctrl_longitudinal(vxRef, vx, ax, ctrlState, CTR
 
     forceCmd.Fx_total = local_sat(fxRateLimited, -maxBrakeForce, maxDriveForce);
     forceCmd.brakeRatio = local_sat(max(0, -forceCmd.Fx_total) / max(maxBrakeForce, 1), 0, 1);
+    forceCmd.brakeAssistRatio = 0;
+
+    % B1-style straight braking has scenario brake torque applied outside
+    % this PI loop. Request a small additive brake assist only when that
+    % external braking event is visible through vehicle deceleration.
+    if externalBrakeActive && vx > 3.0
+        forceCmd.brakeAssistRatio = 0.12;
+    end
 
     ctrlState.prevForce = forceCmd.Fx_total;
     ctrlState.absActive = absActive;
     ctrlState.absScale = absScale;
+    ctrlState.brakeAssistRatio = forceCmd.brakeAssistRatio;
 
 end
 

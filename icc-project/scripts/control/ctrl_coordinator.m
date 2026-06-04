@@ -9,6 +9,7 @@ function actuatorCmd = ctrl_coordinator(latCmd, lonCmd, verCmd, vx, VEH, CTRL, L
 %       latCmd.yawMoment  - ESC 요청 yaw moment [Nm]
 %       lonCmd.Fx_total   - 종방향 힘 요구 [N]
 %       lonCmd.brakeRatio - 제동 비율
+%       lonCmd.brakeAssistRatio - 외부 직진 제동 보조 비율
 %       verCmd            - 4×1 damping [Ns/m] (ctrl_vertical 출력)
 %       vx, VEH, CTRL, LIM
 %
@@ -47,8 +48,11 @@ function actuatorCmd = ctrl_coordinator(latCmd, lonCmd, verCmd, vx, VEH, CTRL, L
 
     steerReq = local_get_nested(latCmd, {'steerAngle'}, 0);
     yawMomentReq = local_get_nested(latCmd, {'yawMoment'}, 0);
+    measuredYawRate = local_get_nested(latCmd, {'measuredYawRate'}, 0);
+    measuredSlipAngle = local_get_nested(latCmd, {'measuredSlipAngle'}, 0);
     fxTotalReq = local_get_nested(lonCmd, {'Fx_total'}, 0);
     brakeRatio = local_sat(local_get_nested(lonCmd, {'brakeRatio'}, 0), 0, 1);
+    brakeAssistRatio = local_sat(local_get_nested(lonCmd, {'brakeAssistRatio'}, 0), 0, 1);
 
     rw = abs(local_get_nested(VEH, {'rw'}, 0.31));
     trackF = max(abs(local_get_nested(VEH, {'track_f'}, 1.55)), 0.5);
@@ -78,6 +82,24 @@ function actuatorCmd = ctrl_coordinator(latCmd, lonCmd, verCmd, vx, VEH, CTRL, L
     end
 
     baseBrake = totalBrakeTorque * [0.30; 0.30; 0.20; 0.20];
+
+    % Longitudinal brake assist: only boost when the vehicle is braking
+    % nearly straight, so brake-in-turn ESC/AFS behavior is left unchanged.
+    isStraightBrake = abs(measuredYawRate) < 0.05 && ...
+                      abs(measuredSlipAngle) < 0.05 && ...
+                      abs(steerReq) < deg2rad(1.5) && ...
+                      abs(yawMomentReq) < 100 && ...
+                      (brakeRatio > 0.5 || brakeAssistRatio > 0);
+    if isStraightBrake
+        brakeBoostGain = 1.12;
+        baseBrake = baseBrake * brakeBoostGain;
+
+        if brakeAssistRatio > 0
+            assistBrake = brakeAssistRatio * 2.0 * maxBrakeTrq * [0.30; 0.30; 0.20; 0.20];
+            baseBrake = baseBrake + assistBrake;
+        end
+    end
+
     baseBrake = local_sat(baseBrake, 0, maxBrakeTrq);
 
     %% ESC yaw-moment allocation via differential braking

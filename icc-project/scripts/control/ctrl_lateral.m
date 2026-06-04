@@ -126,6 +126,10 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
     ctrlState.lastSteerAngle = deltaAdd.steerAngle;
     ctrlState.lastYawMoment = deltaAdd.yawMoment;
 
+    % Pass measured motion states downstream for straight-brake gating.
+    deltaAdd.measuredYawRate = yawRate;
+    deltaAdd.measuredSlipAngle = slipAngle;
+
 end
 
 %% ------------------------------------------------------------------------
