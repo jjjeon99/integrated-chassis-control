@@ -78,7 +78,12 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
 
     intEffMax = min(0.05 * intMax, intMax * kiSched);
     intCandidate = local_sat(ctrlState.intError + yawErr * dt, -intEffMax, intEffMax);
-    steerFF = 1.15 * yawRateRefSafe;
+    wheelbaseFF = 2.7;
+    if vxAbs > 5.0
+        steerFF = 0.8 * wheelbaseFF * yawRateRefSafe / max(vxAbs, 1.0);
+    else
+        steerFF = 0;
+    end
     steerUnsat = speedBlend * (kpEff * yawErr + kiEff * intCandidate + kdEff * yawErrDot + steerFF);
 
     if abs(steerUnsat) <= steerAssistLimit || sign(steerUnsat) ~= sign(yawErr)

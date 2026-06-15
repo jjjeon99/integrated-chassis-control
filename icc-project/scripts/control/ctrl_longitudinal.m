@@ -158,28 +158,26 @@ function [forceCmd, ctrlState] = ctrl_longitudinal(vxRef, vx, ax, ctrlState, CTR
         slipDeadband = 0.010;
         slipErr = slipTarget - brakeSlip;
         wheelAssistTarget = zeros(4, 1);
-        addMask = slipErr > slipDeadband;
-        wheelAssistTarget(addMask) = 0.8 * (slipErr(addMask) - slipDeadband);
 
         % Continuous ABS relief proportional to slip error. The command is
         % sent directly to the coordinator, which subtracts it from the
         % scenario brake torque in straight braking.
         slipError = brakeSlip - slipTarget;
         releaseMask = slipError > 0;
-        wheelAssistTarget(releaseMask) = -4.5 * slipError(releaseMask);
-        wheelAssistTarget = local_sat(wheelAssistTarget, -0.75, 0.12);
+        wheelAssistTarget(releaseMask) = -8.0 * slipError(releaseMask);
+        wheelAssistTarget = local_sat(wheelAssistTarget, -1.2, 0.0);
 
         % If all cached slips are still unavailable/zero at brake onset,
         % apply a short conservative push so the controller visibly engages.
         if peakBrakeSlip < 1e-4
-            wheelAssistTarget = 0.14 * ones(4, 1);
+            wheelAssistTarget = zeros(4, 1);
         end
 
     else
         wheelAssistTarget = zeros(4, 1);
     end
-    forceCmd.brakeAssistWheelRatio = local_sat(wheelAssistTarget, -0.75, 0.12);
-    forceCmd.brakeAssistRatio = local_sat(mean(forceCmd.brakeAssistWheelRatio), -0.75, 0.12);
+    forceCmd.brakeAssistWheelRatio = local_sat(wheelAssistTarget, -1.2, 0.0);
+    forceCmd.brakeAssistRatio = local_sat(mean(forceCmd.brakeAssistWheelRatio), -1.2, 0.0);
 
     ctrlState.prevForce = forceCmd.Fx_total;
     ctrlState.absActive = absActive;

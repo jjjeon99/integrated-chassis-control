@@ -15,9 +15,9 @@ function actuatorCmd = ctrl_coordinator(latCmd, lonCmd, verCmd, vx, VEH, CTRL, L
     measuredSlipAngle = local_get_nested(latCmd, {'measuredSlipAngle'}, 0);
     fxTotalReq = local_get_nested(lonCmd, {'Fx_total'}, 0);
     brakeRatio = local_sat(local_get_nested(lonCmd, {'brakeRatio'}, 0), 0, 1);
-    brakeAssistRatio = local_sat(local_get_nested(lonCmd, {'brakeAssistRatio'}, 0), 0, 1);
+    brakeAssistRatio = local_sat(local_get_nested(lonCmd, {'brakeAssistRatio'}, 0), -1.2, 1);
     brakeAssistWheelRatio = local_get_vec4(lonCmd, 'brakeAssistWheelRatio', brakeAssistRatio);
-    brakeAssistWheelRatio = local_sat(brakeAssistWheelRatio, -1, 1);
+    brakeAssistWheelRatio = local_sat(brakeAssistWheelRatio, -1.2, 1);
 
     rw = abs(local_get_nested(VEH, {'rw'}, 0.31));
     trackF = max(abs(local_get_nested(VEH, {'track_f'}, 1.55)), 0.5);
