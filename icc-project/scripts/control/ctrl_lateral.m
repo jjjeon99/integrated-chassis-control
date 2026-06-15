@@ -80,7 +80,7 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
     intCandidate = local_sat(ctrlState.intError + yawErr * dt, -intEffMax, intEffMax);
     wheelbaseFF = 2.7;
     if vxAbs > 5.0
-        steerFF = 0.8 * wheelbaseFF * yawRateRefSafe / max(vxAbs, 1.0);
+        steerFF = 1.05 * wheelbaseFF * yawRateRefSafe / max(vxAbs, 1.0);
     else
         steerFF = 0;
     end

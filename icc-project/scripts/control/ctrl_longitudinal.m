@@ -155,16 +155,18 @@ function [forceCmd, ctrlState] = ctrl_longitudinal(vxRef, vx, ax, ctrlState, CTR
     peakBrakeSlip = max(brakeSlip);
     if hardBrakeActive
         slipTarget = 0.14;
-        slipDeadband = 0.010;
-        slipErr = slipTarget - brakeSlip;
+        prevAbsCmd = local_safe_vec4(ctrlState.prevBrakeAssistRatio, 0);
         wheelAssistTarget = zeros(4, 1);
 
         % Continuous ABS relief proportional to slip error. The command is
         % sent directly to the coordinator, which subtracts it from the
-        % scenario brake torque in straight braking.
+        % scenario brake torque in straight braking. When slip recovers,
+        % ramp pressure back in from the previous relief instead of jumping
+        % to zero and re-locking the tire.
         slipError = brakeSlip - slipTarget;
         releaseMask = slipError > 0;
         wheelAssistTarget(releaseMask) = -8.0 * slipError(releaseMask);
+        wheelAssistTarget(~releaseMask) = min(0.0, prevAbsCmd(~releaseMask) + 4.0 * dt);
         wheelAssistTarget = local_sat(wheelAssistTarget, -1.2, 0.0);
 
         % If all cached slips are still unavailable/zero at brake onset,
