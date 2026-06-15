@@ -155,19 +155,18 @@ function [forceCmd, ctrlState] = ctrl_longitudinal(vxRef, vx, ax, ctrlState, CTR
     peakBrakeSlip = max(brakeSlip);
     if hardBrakeActive
         slipTarget = 0.12;
-        slipRelease = 0.15;
+        slipDeadband = 0.015;
         slipErr = slipTarget - brakeSlip;
         wheelAssistTarget = zeros(4, 1);
-        addMask = slipErr >= 0;
-        releaseMask = brakeSlip > slipRelease;
-        wheelAssistTarget(addMask) = 1.4 * slipErr(addMask);
-        wheelAssistTarget(~addMask) = 9.0 * slipErr(~addMask);
+        addMask = slipErr > slipDeadband;
+        releaseMask = slipErr < -slipDeadband;
+        wheelAssistTarget(addMask) = 1.0 * (slipErr(addMask) - slipDeadband);
 
-        % Hard ABS relief: once a wheel is clearly beyond the peak-slip
-        % region, request enough negative controller torque to overcome the
-        % scenario brake torque after coordinator allocation.
-        wheelAssistTarget(releaseMask) = -0.85 - 1.8 * (brakeSlip(releaseMask) - slipRelease);
-        wheelAssistTarget = local_sat(wheelAssistTarget, -1.0, 0.18);
+        % Proportional ABS relief around the target slip. Avoid hard
+        % bang-bang pressure dumps that make slip RMS oscillate.
+        slipOver = brakeSlip - slipTarget;
+        wheelAssistTarget(releaseMask) = -4.2 * (slipOver(releaseMask) - slipDeadband);
+        wheelAssistTarget = local_sat(wheelAssistTarget, -0.75, 0.16);
 
         % If all cached slips are still unavailable/zero at brake onset,
         % apply a short conservative push so the controller visibly engages.
@@ -178,12 +177,12 @@ function [forceCmd, ctrlState] = ctrl_longitudinal(vxRef, vx, ax, ctrlState, CTR
     else
         wheelAssistTarget = zeros(4, 1);
     end
-    assistStep = 35.0 * dt;
+    assistStep = 14.0 * dt;
     forceCmd.brakeAssistWheelRatio = local_sat(wheelAssistTarget, ...
         ctrlState.prevBrakeAssistRatio - assistStep, ...
         ctrlState.prevBrakeAssistRatio + assistStep);
-    forceCmd.brakeAssistWheelRatio = local_sat(forceCmd.brakeAssistWheelRatio, -1.0, 0.18);
-    forceCmd.brakeAssistRatio = local_sat(mean(forceCmd.brakeAssistWheelRatio), -1.0, 0.18);
+    forceCmd.brakeAssistWheelRatio = local_sat(forceCmd.brakeAssistWheelRatio, -0.75, 0.16);
+    forceCmd.brakeAssistRatio = local_sat(mean(forceCmd.brakeAssistWheelRatio), -0.75, 0.16);
 
     ctrlState.prevForce = forceCmd.Fx_total;
     ctrlState.absActive = absActive;

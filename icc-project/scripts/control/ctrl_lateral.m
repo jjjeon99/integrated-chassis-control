@@ -59,7 +59,9 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
     vxAbs = abs(vx);
     vxEff = max(vxAbs, 0.5);
     speedBlend = local_sat((vxAbs - 0.5) / 2.5, 0, 1);
-    speedSched = 1.0 - 0.5 * local_sat((vxAbs - 5.0) / 20.0, 0, 1);
+    speedAtten = local_sat((vxAbs - 5.0) / 20.0, 0, 1);
+    kpSched = 1.0 - 0.3 * speedAtten;
+    kiSched = 1.0 - 0.9 * speedAtten;
 
     yawRateRefLimit = min(yawRateHardLimit, ayHardLimit / vxEff);
     yawRateRefSafe = local_sat(yawRateRef, -yawRateRefLimit, yawRateRefLimit);
@@ -68,13 +70,14 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
     yawErrDot = (yawErr - ctrlState.prevError) / max(dt, 1e-4);
 
     %% AFS: PID yaw-rate tracking with gain scheduling + anti-windup
-    kpEff = kp * speedSched;
-    kiEff = ki * speedSched;
+    kpEff = kp * kpSched;
+    kiEff = ki * kiSched;
     % Disable raw finite-difference D action; unfiltered yawErrDot caused
     % chattering and unrealistically fast yaw-rate rise in step steering.
     kdEff = 0;
 
-    intCandidate = local_sat(ctrlState.intError + yawErr * dt, -intMax, intMax);
+    intEffMax = max(0.15 * intMax, intMax * kiSched);
+    intCandidate = local_sat(ctrlState.intError + yawErr * dt, -intEffMax, intEffMax);
     steerUnsat = speedBlend * (kpEff * yawErr + kiEff * intCandidate + kdEff * yawErrDot);
 
     if abs(steerUnsat) <= steerAssistLimit || sign(steerUnsat) ~= sign(yawErr)
@@ -112,7 +115,7 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
         yawMomentCmd = mzTrack + mzSlip;
     else
         if abs(yawNorm) > 0.25
-            yawMomentCmd = 0.80 * mzTrack;
+            yawMomentCmd = 0.30 * mzTrack;
         else
             yawMomentCmd = 0;
         end
