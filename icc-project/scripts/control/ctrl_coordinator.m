@@ -96,11 +96,15 @@ function actuatorCmd = ctrl_coordinator(latCmd, lonCmd, verCmd, vx, VEH, CTRL, L
                       abs(yawMomentReq) < 100 && ...
                       (brakeRatio > 0.5 || max(abs(brakeAssistWheelRatio)) > 0);
     if isStraightBrake
-        brakeBoostGain = 1.08;
+        brakeBoostGain = 1.07;
         baseBrake = baseBrake * brakeBoostGain;
 
         if max(abs(brakeAssistWheelRatio)) > 0
-            assistBrake = 2.0 * maxBrakeTrq * 0.25 * brakeAssistWheelRatio;
+            assistBrake = zeros(4, 1);
+            addMask = brakeAssistWheelRatio > 0;
+            relMask = brakeAssistWheelRatio < 0;
+            assistBrake(addMask) = 2.0 * maxBrakeTrq * 0.22 * brakeAssistWheelRatio(addMask);
+            assistBrake(relMask) = 2.0 * maxBrakeTrq * 0.34 * brakeAssistWheelRatio(relMask);
             baseBrake = baseBrake + assistBrake;
         end
     end
