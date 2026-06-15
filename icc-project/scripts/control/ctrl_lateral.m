@@ -51,7 +51,7 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
     intMax = abs(local_get_nested(CTRL, {'LAT','intMax'}, 5.0));
 
     steerHardLimit = abs(local_get_nested(LIM, {'MAX_STEER_ANGLE'}, deg2rad(30)));
-    steerAssistLimit = min(steerHardLimit, deg2rad(3.8));
+    steerAssistLimit = min(steerHardLimit, deg2rad(5.0));
     yawRateHardLimit = abs(local_get_nested(LIM, {'MAX_YAW_RATE'}, deg2rad(60)));
     ayHardLimit = abs(local_get_nested(LIM, {'MAX_AY'}, 9.81));
     slipHardLimit = abs(local_get_nested(LIM, {'MAX_SLIP_ANGLE'}, deg2rad(12)));
@@ -84,10 +84,10 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
     % In steady circular driving and path-following DLC the driver model
     % already carries the intended curvature. Keep AFS modest unless the
     % yaw error is large enough to be a stability problem.
-    steadyYawGuard = (abs(yawRateRefSafe) > deg2rad(3)) && ...
-                     (abs(yawErr) < 0.30 * max(abs(yawRateRefSafe), deg2rad(3)));
-    if steadyYawGuard && abs(slipAngle) < deg2rad(3.5)
-        steerUnsat = 0.18 * steerUnsat;
+    steadyYawGuard = (abs(yawRateRefSafe) > deg2rad(5)) && ...
+                     (abs(yawErr) < 0.20 * max(abs(yawRateRefSafe), deg2rad(5)));
+    if steadyYawGuard && abs(slipAngle) < deg2rad(2.5)
+        steerUnsat = 0.50 * steerUnsat;
     end
 
     deltaAdd.steerAngle = local_sat(steerUnsat, -steerAssistLimit, steerAssistLimit);
@@ -102,7 +102,6 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
     yawMomentLimit = 1400 + 1000 * local_sat((vxAbs - 8.0) / 20.0, 0, 1);
     betaNorm = betaError / max(slipHardLimit - betaThreshold, deg2rad(1));
     yawNorm  = yawErr / max(yawRateRefLimit, deg2rad(5));
-    yawRateNorm = yawRateSafe / max(yawRateRefLimit, deg2rad(5));
 
     mzTrack = speedBlend * 0.35 * yawMomentLimit * local_sat(yawNorm, -1, 1);
     mzSlip  = speedBlend * yawMomentLimit * local_sat(betaNorm, -1, 1);
@@ -110,9 +109,8 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
     if betaExcess > 0
         yawMomentCmd = mzTrack + mzSlip;
     else
-        if abs(yawNorm) > 0.35
-            yawDamp = -0.44 * speedBlend * yawMomentLimit * local_sat(yawRateNorm, -1, 1);
-            yawMomentCmd = 0.04 * mzTrack + yawDamp;
+        if abs(yawNorm) > 0.25
+            yawMomentCmd = 0.75 * mzTrack;
         else
             yawMomentCmd = 0;
         end
