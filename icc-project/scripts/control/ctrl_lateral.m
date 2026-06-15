@@ -127,9 +127,13 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
     else
         % Keep ESC dormant in benign conditions. This preserves path and
         % steady-state cornering KPIs; ESC wakes only for large yaw errors.
-        if abs(yawNorm) > 0.30
-            yawDamp = -0.30 * speedBlend * yawMomentLimit * local_sat(yawRateNorm, -1, 1);
-            yawMomentCmd = 0.08 * mzTrack + yawDamp;
+        dampReady = abs(yawRateSafe) > 0.80 * max(abs(yawRateRefSafe), deg2rad(2)) && ...
+                    sign(yawRateSafe) == sign(yawRateRefSafe);
+        if dampReady
+            yawDamp = -0.32 * speedBlend * yawMomentLimit * local_sat(yawRateNorm, -1, 1);
+            yawMomentCmd = yawDamp;
+        elseif abs(yawNorm) > 0.55
+            yawMomentCmd = 0.08 * mzTrack;
         else
             yawMomentCmd = 0;
         end
