@@ -165,7 +165,7 @@ function [forceCmd, ctrlState] = ctrl_longitudinal(vxRef, vx, ax, ctrlState, CTR
         % to zero and re-locking the tire.
         slipError = brakeSlip - slipTarget;
         releaseMask = slipError > 0;
-        wheelAssistTarget(releaseMask) = -8.0 * slipError(releaseMask);
+        wheelAssistTarget(releaseMask) = -30.0 * slipError(releaseMask);
         wheelAssistTarget(~releaseMask) = min(0.0, prevAbsCmd(~releaseMask) + 4.0 * dt);
         wheelAssistTarget = local_sat(wheelAssistTarget, -1.2, 0.0);
 

@@ -60,7 +60,7 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
     vxEff = max(vxAbs, 0.5);
     speedBlend = local_sat((vxAbs - 0.5) / 2.5, 0, 1);
     speedAtten = local_sat((vxAbs - 5.0) / 20.0, 0, 1);
-    kpSched = 1.0 - 0.2 * speedAtten;
+    kpSched = 1.0 - 0.1 * speedAtten;
     kiSched = 1.0 - 0.9 * speedAtten;
 
     yawRateRefLimit = min(yawRateHardLimit, ayHardLimit / vxEff);
