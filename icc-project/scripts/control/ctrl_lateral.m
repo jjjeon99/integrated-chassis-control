@@ -121,7 +121,7 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
         yawMomentCmd = mzTrack + mzSlip;
     else
         if abs(yawNorm) > 0.25
-            yawMomentCmd = 0.30 * mzTrack;
+            yawMomentCmd = 0.55 * mzTrack;
         else
             yawMomentCmd = 0;
         end
