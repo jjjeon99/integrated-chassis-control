@@ -95,15 +95,6 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
         steerUnsat = speedBlend * (kpEff * yawErr + kiEff * ctrlState.intError + kdEff * yawErrDot);
     end
 
-    % Step-steer support: give a brief extra AFS push while yaw rate is
-    % still far below the target, then let yaw damping handle overshoot.
-    riseAssistActive = abs(yawErr) > 0.55 * max(abs(yawRateRefSafe), deg2rad(3)) && ...
-                       sign(yawErr) == sign(yawRateRefSafe) && ...
-                       abs(slipAngle) < deg2rad(2.5);
-    if riseAssistActive
-        steerUnsat = steerUnsat + speedBlend * 0.90 * yawRateRefSafe;
-    end
-
     %% Steady/benign corner guard
     % In steady circular driving and path-following DLC the driver model
     % already carries the intended curvature. Keep AFS modest unless the
@@ -136,9 +127,9 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
     else
         % Keep ESC dormant in benign conditions. This preserves path and
         % steady-state cornering KPIs; ESC wakes only for large yaw errors.
-        if abs(yawNorm) > 0.30
-            yawDamp = -0.30 * speedBlend * yawMomentLimit * local_sat(yawRateNorm, -1, 1);
-            yawMomentCmd = 0.08 * mzTrack + yawDamp;
+        if abs(yawNorm) > 0.35
+            yawDamp = -0.38 * speedBlend * yawMomentLimit * local_sat(yawRateNorm, -1, 1);
+            yawMomentCmd = 0.06 * mzTrack + yawDamp;
         else
             yawMomentCmd = 0;
         end
