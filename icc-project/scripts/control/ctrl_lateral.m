@@ -88,20 +88,20 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
     intCandidate = local_sat(ctrlState.intError + yawErr * dt, -intMax, intMax);
     steerUnsat = speedBlend * (kpEff * yawErr + kiEff * intCandidate + kdEff * yawErrDot);
 
+    % If the steering assist saturates in the same direction as the error,
+    % freeze the integrator to avoid windup. Otherwise keep integrating.
+    if abs(steerUnsat) <= steerAssistLimit || sign(steerUnsat) ~= sign(yawErr)
+        ctrlState.intError = intCandidate;
+        steerUnsat = speedBlend * (kpEff * yawErr + kiEff * ctrlState.intError + kdEff * yawErrDot);
+    end
+
     % Step-steer support: give a brief extra AFS push while yaw rate is
     % still far below the target, then let yaw damping handle overshoot.
     riseAssistActive = abs(yawErr) > 0.55 * max(abs(yawRateRefSafe), deg2rad(3)) && ...
                        sign(yawErr) == sign(yawRateRefSafe) && ...
                        abs(slipAngle) < deg2rad(2.5);
     if riseAssistActive
-        steerUnsat = steerUnsat + speedBlend * 0.35 * yawRateRefSafe;
-    end
-
-    % If the steering assist saturates in the same direction as the error,
-    % freeze the integrator to avoid windup. Otherwise keep integrating.
-    if abs(steerUnsat) <= steerAssistLimit || sign(steerUnsat) ~= sign(yawErr)
-        ctrlState.intError = intCandidate;
-        steerUnsat = speedBlend * (kpEff * yawErr + kiEff * ctrlState.intError + kdEff * yawErrDot);
+        steerUnsat = steerUnsat + speedBlend * 0.90 * yawRateRefSafe;
     end
 
     %% Steady/benign corner guard
