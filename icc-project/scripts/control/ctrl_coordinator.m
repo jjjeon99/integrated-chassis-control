@@ -10,6 +10,7 @@ function actuatorCmd = ctrl_coordinator(latCmd, lonCmd, verCmd, vx, VEH, CTRL, L
 %       lonCmd.Fx_total   - 종방향 힘 요구 [N]
 %       lonCmd.brakeRatio - 제동 비율
 %       lonCmd.brakeAssistRatio - 외부 직진 제동 보조 비율
+%       lonCmd.brakeAssistWheelRatio - wheel별 ABS 제동 보정 비율
 %       verCmd            - 4×1 damping [Ns/m] (ctrl_vertical 출력)
 %       vx, VEH, CTRL, LIM
 %
@@ -48,11 +49,14 @@ function actuatorCmd = ctrl_coordinator(latCmd, lonCmd, verCmd, vx, VEH, CTRL, L
 
     steerReq = local_get_nested(latCmd, {'steerAngle'}, 0);
     yawMomentReq = local_get_nested(latCmd, {'yawMoment'}, 0);
+    yawRateRef = local_get_nested(latCmd, {'yawRateRef'}, 0);
     measuredYawRate = local_get_nested(latCmd, {'measuredYawRate'}, 0);
     measuredSlipAngle = local_get_nested(latCmd, {'measuredSlipAngle'}, 0);
     fxTotalReq = local_get_nested(lonCmd, {'Fx_total'}, 0);
     brakeRatio = local_sat(local_get_nested(lonCmd, {'brakeRatio'}, 0), 0, 1);
     brakeAssistRatio = local_sat(local_get_nested(lonCmd, {'brakeAssistRatio'}, 0), 0, 1);
+    brakeAssistWheelRatio = local_get_vec4(lonCmd, 'brakeAssistWheelRatio', brakeAssistRatio);
+    brakeAssistWheelRatio = local_sat(brakeAssistWheelRatio, -1, 1);
 
     rw = abs(local_get_nested(VEH, {'rw'}, 0.31));
     trackF = max(abs(local_get_nested(VEH, {'track_f'}, 1.55)), 0.5);
@@ -85,38 +89,50 @@ function actuatorCmd = ctrl_coordinator(latCmd, lonCmd, verCmd, vx, VEH, CTRL, L
 
     % Longitudinal brake assist: only boost when the vehicle is braking
     % nearly straight, so brake-in-turn ESC/AFS behavior is left unchanged.
-    isStraightBrake = abs(measuredYawRate) < 0.05 && ...
+    isStraightBrake = abs(yawRateRef) < 0.03 && ...
+                      abs(measuredYawRate) < 0.05 && ...
                       abs(measuredSlipAngle) < 0.05 && ...
                       abs(steerReq) < deg2rad(1.5) && ...
                       abs(yawMomentReq) < 100 && ...
-                      (brakeRatio > 0.5 || brakeAssistRatio > 0);
+                      (brakeRatio > 0.5 || max(abs(brakeAssistWheelRatio)) > 0);
     if isStraightBrake
-        brakeBoostGain = 1.12;
+        brakeBoostGain = 1.08;
         baseBrake = baseBrake * brakeBoostGain;
 
-        if brakeAssistRatio > 0
-            assistBrake = brakeAssistRatio * 2.0 * maxBrakeTrq * [0.30; 0.30; 0.20; 0.20];
+        if max(abs(brakeAssistWheelRatio)) > 0
+            assistBrake = 2.0 * maxBrakeTrq * 0.25 * brakeAssistWheelRatio;
             baseBrake = baseBrake + assistBrake;
         end
     end
 
-    baseBrake = local_sat(baseBrake, 0, maxBrakeTrq);
+    if isStraightBrake
+        baseBrake = local_sat(baseBrake, -0.8 * maxBrakeTrq, maxBrakeTrq);
+    else
+        baseBrake = local_sat(baseBrake, 0, maxBrakeTrq);
+    end
 
     %% ESC yaw-moment allocation via differential braking
     % Plant sign convention:
-    %   positive yaw moment (CCW) <=> right-side brake torque > left-side.
+    %   positive yaw moment (CCW) <=> left-side brake torque > right-side.
     yawBlend = local_sat((abs(vx) - 1.0) / 4.0, 0, 1);
     ratioFront = 0.60;
     yawMomentReq = yawBlend * yawMomentReq;
+    if isStraightBrake
+        yawMomentReq = 0;
+    end
 
-    diffFront = 2 * (ratioFront * yawMomentReq) * rw / trackF;             % T_R - T_L
-    diffRear  = 2 * ((1 - ratioFront) * yawMomentReq) * rw / trackR;       % T_R - T_L
+    diffFront = -2 * (ratioFront * yawMomentReq) * rw / trackF;            % T_R - T_L
+    diffRear  = -2 * ((1 - ratioFront) * yawMomentReq) * rw / trackR;      % T_R - T_L
 
     frontPair = local_apply_yaw_pair(baseBrake(1), baseBrake(2), diffFront, maxBrakeTrq);
     rearPair  = local_apply_yaw_pair(baseBrake(3), baseBrake(4), diffRear,  maxBrakeTrq);
 
     actuatorCmd.brakeTorque = [frontPair; rearPair];
-    actuatorCmd.brakeTorque = local_sat(actuatorCmd.brakeTorque, 0, maxBrakeTrq);
+    if isStraightBrake
+        actuatorCmd.brakeTorque = local_sat(actuatorCmd.brakeTorque, -0.8 * maxBrakeTrq, maxBrakeTrq);
+    else
+        actuatorCmd.brakeTorque = local_sat(actuatorCmd.brakeTorque, 0, maxBrakeTrq);
+    end
 
 end
 
@@ -187,6 +203,14 @@ function vec = local_safe_vec4(vec, defaultValue)
     end
     bad = ~isfinite(vec);
     vec(bad) = defaultValue;
+end
+
+function vec = local_get_vec4(s, fieldName, defaultValue)
+    if ~isstruct(s) || ~isfield(s, fieldName)
+        vec = defaultValue * ones(4, 1);
+        return;
+    end
+    vec = local_safe_vec4(s.(fieldName), defaultValue);
 end
 
 function y = local_sat(x, lower, upper)

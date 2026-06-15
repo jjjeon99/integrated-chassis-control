@@ -64,7 +64,7 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
     intMax = abs(local_get_nested(CTRL, {'LAT','intMax'}, 5.0));
 
     steerHardLimit = abs(local_get_nested(LIM, {'MAX_STEER_ANGLE'}, deg2rad(30)));
-    steerAssistLimit = min(steerHardLimit, deg2rad(8));
+    steerAssistLimit = min(steerHardLimit, deg2rad(3.0));
     yawRateHardLimit = abs(local_get_nested(LIM, {'MAX_YAW_RATE'}, deg2rad(60)));
     ayHardLimit = abs(local_get_nested(LIM, {'MAX_AY'}, 9.81));
     slipHardLimit = abs(local_get_nested(LIM, {'MAX_SLIP_ANGLE'}, deg2rad(12)));
@@ -95,28 +95,44 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
         steerUnsat = speedBlend * (kpEff * yawErr + kiEff * ctrlState.intError + kdEff * yawErrDot);
     end
 
+    %% Steady/benign corner guard
+    % In steady circular driving and path-following DLC the driver model
+    % already carries the intended curvature. Keep AFS modest unless the
+    % yaw error is large enough to be a stability problem.
+    steadyYawGuard = (abs(yawRateRefSafe) > deg2rad(3)) && ...
+                     (abs(yawErr) < 0.30 * max(abs(yawRateRefSafe), deg2rad(3)));
+    if steadyYawGuard && abs(slipAngle) < deg2rad(3.5)
+        steerUnsat = 0.18 * steerUnsat;
+    end
+
     deltaAdd.steerAngle = local_sat(steerUnsat, -steerAssistLimit, steerAssistLimit);
 
     %% ESC: slip-angle limiter + light yaw-rate support
-    betaThreshold = min(deg2rad(5), 0.9 * slipHardLimit);
+    betaThreshold = min(deg2rad(3.0), 0.75 * slipHardLimit);
     betaExcess = max(abs(slipAngle) - betaThreshold, 0);
-    betaError = -sign(slipAngle) * betaExcess;
+    betaError = sign(slipAngle) * betaExcess;
 
     % Positive yaw moment must support the plant sign convention:
-    % larger right-side brake torque -> positive (CCW) yaw moment.
-    yawMomentLimit = 1200 + 800 * local_sat((vxAbs - 8.0) / 20.0, 0, 1);
+    % larger left-side brake torque -> positive (CCW) yaw moment.
+    yawMomentLimit = 1400 + 1000 * local_sat((vxAbs - 8.0) / 20.0, 0, 1);
     betaNorm = betaError / max(slipHardLimit - betaThreshold, deg2rad(1));
     yawNorm  = yawErr / max(yawRateRefLimit, deg2rad(5));
+    yawRateNorm = yawRateSafe / max(yawRateRefLimit, deg2rad(5));
 
-    mzTrack = speedBlend * 0.25 * yawMomentLimit * local_sat(yawNorm, -1, 1);
+    mzTrack = speedBlend * 0.35 * yawMomentLimit * local_sat(yawNorm, -1, 1);
     mzSlip  = speedBlend * yawMomentLimit * local_sat(betaNorm, -1, 1);
 
     if betaExcess > 0
         yawMomentCmd = mzTrack + mzSlip;
     else
-        % Keep ESC dormant in benign conditions except for small damping
-        % around large yaw-rate errors.
-        yawMomentCmd = 0.35 * mzTrack;
+        % Keep ESC dormant in benign conditions. This preserves path and
+        % steady-state cornering KPIs; ESC wakes only for large yaw errors.
+        if abs(yawNorm) > 0.30
+            yawDamp = 0.26 * speedBlend * yawMomentLimit * local_sat(yawRateNorm, -1, 1);
+            yawMomentCmd = 0.08 * mzTrack + yawDamp;
+        else
+            yawMomentCmd = 0;
+        end
     end
 
     deltaAdd.yawMoment = local_sat(yawMomentCmd, -yawMomentLimit, yawMomentLimit);
@@ -127,6 +143,7 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
     ctrlState.lastYawMoment = deltaAdd.yawMoment;
 
     % Pass measured motion states downstream for straight-brake gating.
+    deltaAdd.yawRateRef = yawRateRef;
     deltaAdd.measuredYawRate = yawRate;
     deltaAdd.measuredSlipAngle = slipAngle;
 

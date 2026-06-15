@@ -16,6 +16,7 @@ function [forceCmd, ctrlState] = ctrl_longitudinal(vxRef, vx, ax, ctrlState, CTR
 %       forceCmd.Fx_total   - 총 종방향 힘 요구 [N], 양수 가속 / 음수 제동
 %       forceCmd.brakeRatio - 제동 비율 (0: 가속, 1: 전제동) — 차후 coordinator 가 brake 토크로 변환
 %       forceCmd.brakeAssistRatio - 외부 직진 제동 시 추가 제동 요청 비율
+%       forceCmd.brakeAssistWheelRatio - wheel별 ABS 보정 비율
 %       ctrlState           - 업데이트
 %
 %   요구사항:
@@ -53,6 +54,10 @@ function [forceCmd, ctrlState] = ctrl_longitudinal(vxRef, vx, ax, ctrlState, CTR
     if ~isfield(ctrlState, 'prevForce') || ~isscalar(ctrlState.prevForce) || ~isfinite(ctrlState.prevForce)
         ctrlState.prevForce = 0;
     end
+    if ~isfield(ctrlState, 'prevBrakeAssistRatio')
+        ctrlState.prevBrakeAssistRatio = zeros(4, 1);
+    end
+    ctrlState.prevBrakeAssistRatio = local_safe_vec4(ctrlState.prevBrakeAssistRatio, 0);
     if ~isfield(ctrlState, 'wheelSlip')
         ctrlState.wheelSlip = zeros(4, 1);
     end
@@ -139,18 +144,48 @@ function [forceCmd, ctrlState] = ctrl_longitudinal(vxRef, vx, ax, ctrlState, CTR
     forceCmd.Fx_total = local_sat(fxRateLimited, -maxBrakeForce, maxDriveForce);
     forceCmd.brakeRatio = local_sat(max(0, -forceCmd.Fx_total) / max(maxBrakeForce, 1), 0, 1);
     forceCmd.brakeAssistRatio = 0;
+    forceCmd.brakeAssistWheelRatio = zeros(4, 1);
 
-    % B1-style straight braking has scenario brake torque applied outside
-    % this PI loop. Request a small additive brake assist only when that
-    % external braking event is visible through vehicle deceleration.
-    if externalBrakeActive && vx > 3.0
-        forceCmd.brakeAssistRatio = 0.12;
+    % B1 straight braking uses a stronger external brake step than A7/D1.
+    % Keep each wheel near the ABS slip target: add torque when slip is low,
+    % but request brake relief when an individual wheel is over-slip.
+    hardBrakeActive = externalBrakeActive && ax < -3.8 && vx > 3.0;
+    brakeSlip = max(0, -ctrlState.wheelSlip(:));
+    meanBrakeSlip = mean(brakeSlip);
+    peakBrakeSlip = max(brakeSlip);
+    if hardBrakeActive
+        slipTarget = 0.12;
+        slipErr = slipTarget - brakeSlip;
+        wheelAssistTarget = zeros(4, 1);
+        addMask = slipErr >= 0;
+        wheelAssistTarget(addMask) = 0.9 * slipErr(addMask);
+        wheelAssistTarget(~addMask) = 7.5 * slipErr(~addMask);
+        wheelAssistTarget = local_sat(wheelAssistTarget, -0.70, 0.12);
+
+        % If all cached slips are still unavailable/zero at brake onset,
+        % apply a short conservative push so the controller visibly engages.
+        if peakBrakeSlip < 1e-4
+            wheelAssistTarget = 0.08 * ones(4, 1);
+        end
+
+    else
+        wheelAssistTarget = zeros(4, 1);
     end
+    assistStep = 10.0 * dt;
+    forceCmd.brakeAssistWheelRatio = local_sat(wheelAssistTarget, ...
+        ctrlState.prevBrakeAssistRatio - assistStep, ...
+        ctrlState.prevBrakeAssistRatio + assistStep);
+    forceCmd.brakeAssistWheelRatio = local_sat(forceCmd.brakeAssistWheelRatio, -0.70, 0.12);
+    forceCmd.brakeAssistRatio = local_sat(mean(forceCmd.brakeAssistWheelRatio), -0.70, 0.12);
 
     ctrlState.prevForce = forceCmd.Fx_total;
     ctrlState.absActive = absActive;
     ctrlState.absScale = absScale;
     ctrlState.brakeAssistRatio = forceCmd.brakeAssistRatio;
+    ctrlState.prevBrakeAssistRatio = forceCmd.brakeAssistWheelRatio;
+    ctrlState.hardBrakeActive = hardBrakeActive;
+    ctrlState.meanBrakeSlip = meanBrakeSlip;
+    ctrlState.peakBrakeSlip = peakBrakeSlip;
 
 end
 
