@@ -150,7 +150,7 @@ function [forceCmd, ctrlState] = ctrl_longitudinal(vxRef, vx, ax, ctrlState, CTR
     % Keep each wheel near the ABS slip target: add torque when slip is low,
     % but request brake relief when an individual wheel is over-slip.
     hardBrakeActive = externalBrakeActive && vx > 3.0;
-    brakeSlip = max(0, -ctrlState.wheelSlip(:));
+    brakeSlip = abs(ctrlState.wheelSlip(:));
     meanBrakeSlip = mean(brakeSlip);
     peakBrakeSlip = max(brakeSlip);
     if hardBrakeActive

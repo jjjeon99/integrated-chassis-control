@@ -70,7 +70,9 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
     %% AFS: PID yaw-rate tracking with gain scheduling + anti-windup
     kpEff = kp * speedSched;
     kiEff = ki * (0.5 + 0.5 * speedSched);
-    kdEff = kd * (0.4 + 0.6 * speedSched);
+    % Disable raw finite-difference D action; unfiltered yawErrDot caused
+    % chattering and unrealistically fast yaw-rate rise in step steering.
+    kdEff = 0;
 
     intCandidate = local_sat(ctrlState.intError + yawErr * dt, -intMax, intMax);
     steerUnsat = speedBlend * (kpEff * yawErr + kiEff * intCandidate + kdEff * yawErrDot);
