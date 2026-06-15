@@ -64,7 +64,7 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
     intMax = abs(local_get_nested(CTRL, {'LAT','intMax'}, 5.0));
 
     steerHardLimit = abs(local_get_nested(LIM, {'MAX_STEER_ANGLE'}, deg2rad(30)));
-    steerAssistLimit = min(steerHardLimit, deg2rad(3.0));
+    steerAssistLimit = min(steerHardLimit, deg2rad(3.5));
     yawRateHardLimit = abs(local_get_nested(LIM, {'MAX_YAW_RATE'}, deg2rad(60)));
     ayHardLimit = abs(local_get_nested(LIM, {'MAX_AY'}, 9.81));
     slipHardLimit = abs(local_get_nested(LIM, {'MAX_SLIP_ANGLE'}, deg2rad(12)));
@@ -128,7 +128,7 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
         % Keep ESC dormant in benign conditions. This preserves path and
         % steady-state cornering KPIs; ESC wakes only for large yaw errors.
         if abs(yawNorm) > 0.30
-            yawDamp = 0.26 * speedBlend * yawMomentLimit * local_sat(yawRateNorm, -1, 1);
+            yawDamp = -0.30 * speedBlend * yawMomentLimit * local_sat(yawRateNorm, -1, 1);
             yawMomentCmd = 0.08 * mzTrack + yawDamp;
         else
             yawMomentCmd = 0;

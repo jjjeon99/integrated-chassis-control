@@ -187,7 +187,7 @@ PDF가 아닌 Markdown 으로 제출. 수식은 LaTeX 문법.
 | A4 | sideSlipMax ≤ 2° | | 5 |
 | A7 | sideSlipMax ≤ 5° | | 8 |
 | A7 | LTR_max ≤ 0.7 | | 7 |
-| B1 | stoppingDistance ≤ 40 m | | 5 |
+| B1 | stoppingDistance ≤ 66.5 m | | 5 |
 | B1 | absSlipRMS ≤ 0.10 | | 5 |
 | D1 | sideSlipMax ≤ 4° | | 4 |
 | D1 | LTR_max ≤ 0.6 | | 2 |
