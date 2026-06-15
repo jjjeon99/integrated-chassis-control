@@ -101,6 +101,14 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
         steerUnsat = 0.50 * steerUnsat;
     end
 
+    % Path error is not available in this controller interface. Use body
+    % side-slip as a drift proxy: when the vehicle slides outward, bias AFS
+    % gently back into the lane without disturbing steady A4 cornering.
+    driftBlend = local_sat((vxAbs - 8.0) / 15.0, 0, 1);
+    betaDriftLimit = deg2rad(4.0);
+    driftSteer = -0.12 * driftBlend * local_sat(slipAngle, -betaDriftLimit, betaDriftLimit);
+    steerUnsat = steerUnsat + driftSteer;
+
     deltaAdd.steerAngle = local_sat(steerUnsat, -steerAssistLimit, steerAssistLimit);
 
     %% ESC: slip-angle limiter + light yaw-rate support
