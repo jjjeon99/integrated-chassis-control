@@ -52,7 +52,7 @@ function actuatorCmd = ctrl_coordinator(latCmd, lonCmd, verCmd, vx, VEH, CTRL, L
                       abs(measuredSlipAngle) < 0.05 && ...
                       abs(steerReq) < deg2rad(1.5) && ...
                       abs(yawMomentReq) < 100 && ...
-                      brakeRatio > 0.5;
+                      (brakeRatio > 0.5 || max(abs(brakeAssistWheelRatio)) > 0);
 
     if isStraightBrake
         brakeBoostGain = 1.08;
@@ -66,8 +66,14 @@ function actuatorCmd = ctrl_coordinator(latCmd, lonCmd, verCmd, vx, VEH, CTRL, L
         baseBrake = baseBrake + assistBrake;
     end
 
-    % 유압 브레이크의 물리적 한계 적용 (토크는 음수가 될 수 없음)
-    baseBrake = local_sat(baseBrake, 0, maxBrakeTrq);
+    % Controller output is added to scenario brake in the runner. During
+    % straight-brake ABS, negative torque is therefore a valid relief request
+    % that reduces the externally commanded master-cylinder torque.
+    if isStraightBrake
+        baseBrake = local_sat(baseBrake, -0.85 * maxBrakeTrq, maxBrakeTrq);
+    else
+        baseBrake = local_sat(baseBrake, 0, maxBrakeTrq);
+    end
 
     %% ESC yaw-moment allocation via differential braking
     yawBlend = local_sat((abs(vx) - 1.0) / 4.0, 0, 1);
@@ -86,9 +92,12 @@ function actuatorCmd = ctrl_coordinator(latCmd, lonCmd, verCmd, vx, VEH, CTRL, L
     frontPair = local_apply_yaw_pair(baseBrake(1), baseBrake(2), diffFront, maxBrakeTrq);
     rearPair  = local_apply_yaw_pair(baseBrake(3), baseBrake(4), diffRear,  maxBrakeTrq);
 
-    % 최종 출력 클리핑 (하한선은 반드시 0)
     actuatorCmd.brakeTorque = [frontPair; rearPair];
-    actuatorCmd.brakeTorque = local_sat(actuatorCmd.brakeTorque, 0, maxBrakeTrq);
+    if isStraightBrake
+        actuatorCmd.brakeTorque = local_sat(actuatorCmd.brakeTorque, -0.85 * maxBrakeTrq, maxBrakeTrq);
+    else
+        actuatorCmd.brakeTorque = local_sat(actuatorCmd.brakeTorque, 0, maxBrakeTrq);
+    end
 
 end
 
