@@ -154,7 +154,7 @@ function [forceCmd, ctrlState] = ctrl_longitudinal(vxRef, vx, ax, ctrlState, CTR
     meanBrakeSlip = mean(brakeSlip);
     peakBrakeSlip = max(brakeSlip);
     if hardBrakeActive
-        slipTarget = 0.12;
+        slipTarget = 0.13;
         prevAbsCmd = local_safe_vec4(ctrlState.prevBrakeAssistRatio, 0);
         wheelAssistTarget = zeros(4, 1);
 
@@ -165,8 +165,8 @@ function [forceCmd, ctrlState] = ctrl_longitudinal(vxRef, vx, ax, ctrlState, CTR
         % to zero and re-locking the tire.
         slipError = brakeSlip - slipTarget;
         releaseMask = slipError > 0;
-        wheelAssistTarget(releaseMask) = -15.0 * slipError(releaseMask);
-        wheelAssistTarget(~releaseMask) = min(0.0, prevAbsCmd(~releaseMask) + 8.0 * dt);
+        wheelAssistTarget(releaseMask) = -20.0 * slipError(releaseMask);
+        wheelAssistTarget(~releaseMask) = min(0.0, prevAbsCmd(~releaseMask) + 1.5 * dt);
         wheelAssistTarget = local_sat(wheelAssistTarget, -1.0, 0.0);
 
         % If all cached slips are still unavailable/zero at brake onset,
