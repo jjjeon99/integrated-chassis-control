@@ -61,7 +61,7 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
     speedBlend = local_sat((vxAbs - 0.5) / 2.5, 0, 1);
     speedAtten = local_sat((vxAbs - 5.0) / 20.0, 0, 1);
     kpSched = 1.0 - 0.2 * speedAtten;
-    kiSched = 1.0 - 0.8 * speedAtten;
+    kiSched = 1.0 - 0.9 * speedAtten;
 
     yawRateRefLimit = min(yawRateHardLimit, ayHardLimit / vxEff);
     yawRateRefSafe = local_sat(yawRateRef, -yawRateRefLimit, yawRateRefLimit);
@@ -76,13 +76,14 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
     % chattering and unrealistically fast yaw-rate rise in step steering.
     kdEff = 0;
 
-    intEffMax = max(0.20 * intMax, intMax * kiSched);
+    intEffMax = min(0.05 * intMax, intMax * kiSched);
     intCandidate = local_sat(ctrlState.intError + yawErr * dt, -intEffMax, intEffMax);
-    steerUnsat = speedBlend * (kpEff * yawErr + kiEff * intCandidate + kdEff * yawErrDot);
+    steerFF = 1.15 * yawRateRefSafe;
+    steerUnsat = speedBlend * (kpEff * yawErr + kiEff * intCandidate + kdEff * yawErrDot + steerFF);
 
     if abs(steerUnsat) <= steerAssistLimit || sign(steerUnsat) ~= sign(yawErr)
         ctrlState.intError = intCandidate;
-        steerUnsat = speedBlend * (kpEff * yawErr + kiEff * ctrlState.intError + kdEff * yawErrDot);
+        steerUnsat = speedBlend * (kpEff * yawErr + kiEff * ctrlState.intError + kdEff * yawErrDot + steerFF);
     end
 
     %% Steady/benign corner guard
