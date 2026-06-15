@@ -93,6 +93,11 @@ function [dampingCmd, ctrlState] = ctrl_vertical(suspState, ctrlState, CTRL, dt)
             cCmd = cCmd + 0.05 * (cMax - cMin) * rearSupport;
         end
 
+        % Extra roll-rate damping during fast lane-change transients. This
+        % targets A1/D1 LTR peaks without adding steady yaw/steer action.
+        rollSupport = local_sat(abs(rollVel) / 0.25, 0, 1);
+        cCmd = cCmd + 0.08 * (cMax - cMin) * rollSupport;
+
         dampingCmd(i) = local_sat(cCmd, cMin, cMax);
     end
 

@@ -6,7 +6,7 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
 %   Inputs:
 %       yawRateRef - 목표 yaw rate [rad/s] (driver delta 로부터 bicycle model 로 계산됨)
 %       yawRate    - 실제 yaw rate [rad/s]
-%       slipAngle  - 차체 슬립 앵글 β [rad]
+%       slipAngle  - 차체 슬립 앵글 beta [rad]
 %       vx         - 종방향 속도 [m/s]
 %       ctrlState  - 내부 상태 (.intError, .prevError, ... 자유롭게 확장 가능)
 %       CTRL       - sim_params.m 에서 정의된 게인 (.LAT.Kp, .Ki, .Kd, .intMax)
@@ -20,24 +20,11 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
 %
 %   요구사항:
 %       1. yaw rate 추종을 위한 보조 조향 (예: PID, LQR, pole placement, SMC 중 택일)
-%       2. |slipAngle| > β_threshold 일 때 yaw moment 인가 (driver intent 와 반대 방향)
-%       3. vx 적응 — 저속/고속 게인 differential (예: gain scheduling, LPV)
+%       2. |slipAngle| > beta_threshold 일 때 yaw moment 인가 (driver intent 와 반대 방향)
+%       3. vx 적응 - 저속/고속 게인 differential (예: gain scheduling, LPV)
 %       4. anti-windup, saturation 처리
-%
-%   금지:
-%       - scenario id 분기 (예: 'A1 이면 X' 같은 hardcoding)
-%       - LIM.MAX_STEER_ANGLE 위반
-%       - global 변수 사용
-%
-%   힌트:
-%       - PID 출발점은 sim_params.m 의 CTRL.LAT.Kp/Ki/Kd 값
-%       - LQR 설계 시 Bicycle Model state-space (scripts/control/calc_bicycle_model.m 참조)
-%       - β-limiter 는 다음 형태가 일반적:
-%             if |β| > β_th
-%                 M_z = -K_β · sign(β) · (|β| - β_th) · f(vx)
-%       - speed scheduling: f(vx) = min(vx/v_ref, 2)
 
-    %% 1. 내부 상태(ctrlState) 및 변수 초기화
+    %% Robust defaults / input sanitizing
     if nargin < 8 || ~isfinite(dt) || dt <= 0
         dt = 0.01;
     end
@@ -50,81 +37,91 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
     slipAngle  = local_safe_scalar(slipAngle, 0);
     vx         = local_safe_scalar(vx, 0);
 
-    if ~isfield(ctrlState, 'intError')
+    if ~isfield(ctrlState, 'intError') || ~isscalar(ctrlState.intError) || ~isfinite(ctrlState.intError)
         ctrlState.intError = 0;
     end
-    if ~isfield(ctrlState, 'prevError')
+    if ~isfield(ctrlState, 'prevError') || ~isscalar(ctrlState.prevError) || ~isfinite(ctrlState.prevError)
         ctrlState.prevError = 0;
     end
 
-    %% 2. 속도 가변 게인 스케줄링 (Gain Scheduling)
-    % 힌트 기준속도 설정 (지정되지 않은 경우 기본값 15 m/s 적용)
-    v_ref = 15;
-    if isfield(CTRL, 'v_ref')
-        v_ref = CTRL.v_ref;
+    %% Controller parameters and guards
+    kp = local_get_nested(CTRL, {'LAT','Kp'}, 1.0);
+    ki = local_get_nested(CTRL, {'LAT','Ki'}, 0.1);
+    kd = local_get_nested(CTRL, {'LAT','Kd'}, 0.05);
+    intMax = abs(local_get_nested(CTRL, {'LAT','intMax'}, 5.0));
+
+    steerHardLimit = abs(local_get_nested(LIM, {'MAX_STEER_ANGLE'}, deg2rad(30)));
+    steerAssistLimit = min(steerHardLimit, deg2rad(3.5));
+    yawRateHardLimit = abs(local_get_nested(LIM, {'MAX_YAW_RATE'}, deg2rad(60)));
+    ayHardLimit = abs(local_get_nested(LIM, {'MAX_AY'}, 9.81));
+    slipHardLimit = abs(local_get_nested(LIM, {'MAX_SLIP_ANGLE'}, deg2rad(12)));
+
+    vxAbs = abs(vx);
+    vxEff = max(vxAbs, 0.5);
+    speedBlend = local_sat((vxAbs - 0.5) / 2.5, 0, 1);
+    speedSched = 0.7 + 0.7 * local_sat((vxAbs - 3.0) / 17.0, 0, 1);
+
+    yawRateRefLimit = min(yawRateHardLimit, ayHardLimit / vxEff);
+    yawRateRefSafe = local_sat(yawRateRef, -yawRateRefLimit, yawRateRefLimit);
+    yawRateSafe = local_sat(yawRate, -1.5 * yawRateHardLimit, 1.5 * yawRateHardLimit);
+    yawErr = yawRateRefSafe - yawRateSafe;
+    yawErrDot = (yawErr - ctrlState.prevError) / max(dt, 1e-4);
+
+    %% AFS: PID yaw-rate tracking with gain scheduling + anti-windup
+    kpEff = kp * speedSched;
+    kiEff = ki * (0.5 + 0.5 * speedSched);
+    kdEff = kd * (0.4 + 0.6 * speedSched);
+
+    intCandidate = local_sat(ctrlState.intError + yawErr * dt, -intMax, intMax);
+    steerUnsat = speedBlend * (kpEff * yawErr + kiEff * intCandidate + kdEff * yawErrDot);
+
+    if abs(steerUnsat) <= steerAssistLimit || sign(steerUnsat) ~= sign(yawErr)
+        ctrlState.intError = intCandidate;
+        steerUnsat = speedBlend * (kpEff * yawErr + kiEff * ctrlState.intError + kdEff * yawErrDot);
     end
 
-    % 종방향 속도 분모 제로 디바이드 방지 및 팩터 계산
-    vx_safe = max(vx, 0.1);
-    f_vx = min(vx_safe / v_ref, 2.0);
+    %% Steady/benign corner guard
+    % In steady circular driving and path-following DLC the driver model
+    % already carries the intended curvature. Keep AFS modest unless the
+    % yaw error is large enough to be a stability problem.
+    steadyYawGuard = (abs(yawRateRefSafe) > deg2rad(3)) && ...
+                     (abs(yawErr) < 0.30 * max(abs(yawRateRefSafe), deg2rad(3)));
+    if steadyYawGuard && abs(slipAngle) < deg2rad(3.5)
+        steerUnsat = 0.18 * steerUnsat;
+    end
 
-    % [AFS 게인 스케줄링]
-    % 고속 주행 시 차량의 횡방향 민감도가 급격히 증가하므로 조향 게인을 낮추어 안정성을 확보합니다.
-    % 저속(f_vx -> 0)일 때는 반응성을 높이고, 고속(f_vx -> 2)일 때는 기본 게인 수준을 유지하도록 설계
-    gain_scale_afs = 1.5 - 0.25 * f_vx;
-    Kp = CTRL.LAT.Kp * gain_scale_afs;
-    Ki = CTRL.LAT.Ki * gain_scale_afs;
-    Kd = CTRL.LAT.Kd * gain_scale_afs;
+    deltaAdd.steerAngle = local_sat(steerUnsat, -steerAssistLimit, steerAssistLimit);
 
-    %% 3. AFS (Active Front Steering) - Yaw Rate 추종 제어 (PID)
-    % 오차 계산 (목표값 - 현재값)
-    errorYawRate = yawRateRef - yawRate;
+    %% ESC: slip-angle limiter + light yaw-rate support
+    betaThreshold = min(deg2rad(3.0), 0.75 * slipHardLimit);
+    betaExcess = max(abs(slipAngle) - betaThreshold, 0);
+    betaError = sign(slipAngle) * betaExcess;
 
-    % 비례항(P) 및 미분항(D) 계산
-    P_term = Kp * errorYawRate;
-    D_term = Kd * (errorYawRate - ctrlState.prevError) / dt;
+    % Positive yaw moment must support the plant sign convention:
+    % larger left-side brake torque -> positive (CCW) yaw moment.
+    yawMomentLimit = 1400 + 1000 * local_sat((vxAbs - 8.0) / 20.0, 0, 1);
+    betaNorm = betaError / max(slipHardLimit - betaThreshold, deg2rad(1));
+    yawNorm  = yawErr / max(yawRateRefLimit, deg2rad(5));
+    yawRateNorm = yawRateSafe / max(yawRateRefLimit, deg2rad(5));
 
-    % 적분항(I) 업데이트 및 Anti-Windup (Clamping 방식)
-    % 제어 입력이 포화되기 전 적분 오차 자체를 한계치로 제한하여 오버슛을 방지합니다.
-    intMax = CTRL.LAT.intMax;
-    ctrlState.intError = ctrlState.intError + errorYawRate * dt;
-    ctrlState.intError = max(min(ctrlState.intError, intMax), -intMax);
-    I_term = Ki * ctrlState.intError;
+    mzTrack = speedBlend * 0.35 * yawMomentLimit * local_sat(yawNorm, -1, 1);
+    mzSlip  = speedBlend * yawMomentLimit * local_sat(betaNorm, -1, 1);
 
-    % 제어 명령 조합 및 Saturation 처리
-    steerCmd = P_term + I_term + D_term;
-    maxSteer = LIM.MAX_STEER_ANGLE;
-    deltaAdd.steerAngle = max(min(steerCmd, maxSteer), -maxSteer);
-
-    %% 4. ESC (Electronic Stability Control) - Slip Angle 제한 (beta-Limiter)
-    % 슬립각 임계값 설정 (LIM 구조체 내 변수가 없다면 MAX 값의 80%를 마진으로 적용)
-    if isfield(LIM, 'SLIP_ANGLE_THRESHOLD')
-        beta_th = LIM.SLIP_ANGLE_THRESHOLD;
+    if betaExcess > 0
+        yawMomentCmd = mzTrack + mzSlip;
     else
-        beta_th = LIM.MAX_SLIP_ANGLE * 0.8;
+        if abs(yawNorm) > 0.35
+            yawDamp = -0.38 * speedBlend * yawMomentLimit * local_sat(yawRateNorm, -1, 1);
+            yawMomentCmd = 0.06 * mzTrack + yawDamp;
+        else
+            yawMomentCmd = 0;
+        end
     end
 
-    % ESC 복원 모멘트 게인 설정 (구조체 유연성 확보)
-    if isfield(CTRL, 'Kbeta')
-        K_beta = CTRL.Kbeta;
-    elseif isfield(CTRL, 'ESC') && isfield(CTRL.ESC, 'Kp')
-        K_beta = CTRL.ESC.Kp;
-    else
-        K_beta = 20000; % Default 복원 요모멘트 게인 [Nm/rad]
-    end
+    deltaAdd.yawMoment = local_sat(yawMomentCmd, -yawMomentLimit, yawMomentLimit);
 
-    % 차체 슬립각 제한 조건 판단
-    abs_slip = abs(slipAngle);
-    if abs_slip > beta_th
-        % 힌트 공식 반영: M_z = -K_beta * sign(beta) * (|beta| - beta_th) * f(vx)
-        % 차량 스핀을 억제하기 위해 슬립각 진행 방향과 정반대(오버스티어 제어)로 복원 모멘트 인가
-        deltaAdd.yawMoment = -K_beta * sign(slipAngle) * (abs_slip - beta_th) * f_vx;
-    else
-        deltaAdd.yawMoment = 0;
-    end
-
-    %% 5. 내부 상태 업데이트 (다음 스텝용)
-    ctrlState.prevError = errorYawRate;
+    %% Housekeeping
+    ctrlState.prevError = yawErr;
     ctrlState.lastSteerAngle = deltaAdd.steerAngle;
     ctrlState.lastYawMoment = deltaAdd.yawMoment;
 
@@ -136,8 +133,29 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
 end
 
 %% ------------------------------------------------------------------------
+function value = local_get_nested(s, fields, defaultValue)
+    value = defaultValue;
+    if ~isstruct(s)
+        return;
+    end
+    cur = s;
+    for i = 1:numel(fields)
+        if ~isstruct(cur) || ~isfield(cur, fields{i})
+            return;
+        end
+        cur = cur.(fields{i});
+    end
+    if isscalar(cur) && isfinite(cur)
+        value = cur;
+    end
+end
+
 function x = local_safe_scalar(x, defaultValue)
     if ~isscalar(x) || ~isfinite(x)
         x = defaultValue;
     end
+end
+
+function y = local_sat(x, lower, upper)
+    y = min(max(x, lower), upper);
 end
