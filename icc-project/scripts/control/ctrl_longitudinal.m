@@ -158,14 +158,14 @@ function [forceCmd, ctrlState] = ctrl_longitudinal(vxRef, vx, ax, ctrlState, CTR
         slipErr = slipTarget - brakeSlip;
         wheelAssistTarget = zeros(4, 1);
         addMask = slipErr >= 0;
-        wheelAssistTarget(addMask) = 1.4 * slipErr(addMask);
-        wheelAssistTarget(~addMask) = 9.0 * slipErr(~addMask);
-        wheelAssistTarget = local_sat(wheelAssistTarget, -0.85, 0.18);
+        wheelAssistTarget(addMask) = 1.0 * slipErr(addMask);
+        wheelAssistTarget(~addMask) = 12.0 * slipErr(~addMask);
+        wheelAssistTarget = local_sat(wheelAssistTarget, -1.00, 0.14);
 
         % If all cached slips are still unavailable/zero at brake onset,
         % apply a short conservative push so the controller visibly engages.
         if peakBrakeSlip < 1e-4
-            wheelAssistTarget = 0.14 * ones(4, 1);
+            wheelAssistTarget = 0.10 * ones(4, 1);
         end
 
     else
@@ -175,8 +175,8 @@ function [forceCmd, ctrlState] = ctrl_longitudinal(vxRef, vx, ax, ctrlState, CTR
     forceCmd.brakeAssistWheelRatio = local_sat(wheelAssistTarget, ...
         ctrlState.prevBrakeAssistRatio - assistStep, ...
         ctrlState.prevBrakeAssistRatio + assistStep);
-    forceCmd.brakeAssistWheelRatio = local_sat(forceCmd.brakeAssistWheelRatio, -0.85, 0.18);
-    forceCmd.brakeAssistRatio = local_sat(mean(forceCmd.brakeAssistWheelRatio), -0.85, 0.18);
+    forceCmd.brakeAssistWheelRatio = local_sat(forceCmd.brakeAssistWheelRatio, -1.00, 0.14);
+    forceCmd.brakeAssistRatio = local_sat(mean(forceCmd.brakeAssistWheelRatio), -1.00, 0.14);
 
     ctrlState.prevForce = forceCmd.Fx_total;
     ctrlState.absActive = absActive;

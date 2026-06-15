@@ -96,17 +96,17 @@ function actuatorCmd = ctrl_coordinator(latCmd, lonCmd, verCmd, vx, VEH, CTRL, L
                       abs(yawMomentReq) < 100 && ...
                       (brakeRatio > 0.5 || max(abs(brakeAssistWheelRatio)) > 0);
     if isStraightBrake
-        brakeBoostGain = 1.08;
+        brakeBoostGain = 1.04;
         baseBrake = baseBrake * brakeBoostGain;
 
         if max(abs(brakeAssistWheelRatio)) > 0
-            assistBrake = 2.0 * maxBrakeTrq * 0.25 * brakeAssistWheelRatio;
+            assistBrake = 2.0 * maxBrakeTrq * 0.30 * brakeAssistWheelRatio;
             baseBrake = baseBrake + assistBrake;
         end
     end
 
     if isStraightBrake
-        baseBrake = local_sat(baseBrake, -0.8 * maxBrakeTrq, maxBrakeTrq);
+        baseBrake = local_sat(baseBrake, -1.0 * maxBrakeTrq, maxBrakeTrq);
     else
         baseBrake = local_sat(baseBrake, 0, maxBrakeTrq);
     end
@@ -129,7 +129,7 @@ function actuatorCmd = ctrl_coordinator(latCmd, lonCmd, verCmd, vx, VEH, CTRL, L
 
     actuatorCmd.brakeTorque = [frontPair; rearPair];
     if isStraightBrake
-        actuatorCmd.brakeTorque = local_sat(actuatorCmd.brakeTorque, -0.8 * maxBrakeTrq, maxBrakeTrq);
+        actuatorCmd.brakeTorque = local_sat(actuatorCmd.brakeTorque, -1.0 * maxBrakeTrq, maxBrakeTrq);
     else
         actuatorCmd.brakeTorque = local_sat(actuatorCmd.brakeTorque, 0, maxBrakeTrq);
     end
