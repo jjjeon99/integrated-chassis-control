@@ -51,7 +51,7 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
     intMax = abs(local_get_nested(CTRL, {'LAT','intMax'}, 5.0));
 
     steerHardLimit = abs(local_get_nested(LIM, {'MAX_STEER_ANGLE'}, deg2rad(30)));
-    steerAssistLimit = min(steerHardLimit, deg2rad(3.5));
+    steerAssistLimit = min(steerHardLimit, deg2rad(3.8));
     yawRateHardLimit = abs(local_get_nested(LIM, {'MAX_YAW_RATE'}, deg2rad(60)));
     ayHardLimit = abs(local_get_nested(LIM, {'MAX_AY'}, 9.81));
     slipHardLimit = abs(local_get_nested(LIM, {'MAX_SLIP_ANGLE'}, deg2rad(12)));
@@ -111,8 +111,8 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
         yawMomentCmd = mzTrack + mzSlip;
     else
         if abs(yawNorm) > 0.35
-            yawDamp = -0.38 * speedBlend * yawMomentLimit * local_sat(yawRateNorm, -1, 1);
-            yawMomentCmd = 0.06 * mzTrack + yawDamp;
+            yawDamp = -0.44 * speedBlend * yawMomentLimit * local_sat(yawRateNorm, -1, 1);
+            yawMomentCmd = 0.04 * mzTrack + yawDamp;
         else
             yawMomentCmd = 0;
         end
