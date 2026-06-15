@@ -56,6 +56,9 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
     if ~isfield(ctrlState, 'prevError') || ~isscalar(ctrlState.prevError) || ~isfinite(ctrlState.prevError)
         ctrlState.prevError = 0;
     end
+    if ~isfield(ctrlState, 'prevYawRateRef') || ~isscalar(ctrlState.prevYawRateRef) || ~isfinite(ctrlState.prevYawRateRef)
+        ctrlState.prevYawRateRef = yawRateRef;
+    end
 
     %% Controller parameters and guards
     kp = local_get_nested(CTRL, {'LAT','Kp'}, 1.0);
@@ -79,6 +82,7 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
     yawRateSafe = local_sat(yawRate, -1.5 * yawRateHardLimit, 1.5 * yawRateHardLimit);
     yawErr = yawRateRefSafe - yawRateSafe;
     yawErrDot = (yawErr - ctrlState.prevError) / max(dt, 1e-4);
+    yawRefDot = (yawRateRefSafe - ctrlState.prevYawRateRef) / max(dt, 1e-4);
 
     %% AFS: PID yaw-rate tracking with gain scheduling + anti-windup
     kpEff = kp * speedSched;
@@ -118,6 +122,13 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
     betaNorm = betaError / max(slipHardLimit - betaThreshold, deg2rad(1));
     yawNorm  = yawErr / max(yawRateRefLimit, deg2rad(5));
     yawRateNorm = yawRateSafe / max(yawRateRefLimit, deg2rad(5));
+    yawResponseRatio = abs(yawRateSafe) / max(abs(yawRateRefSafe), deg2rad(2));
+
+    % Distinguish transient manoeuvres (A1/D1 lane change, A3 step steer)
+    % from steady circular cornering so A4 understeer/side-slip KPIs stay
+    % governed mainly by the driver and tire model.
+    yawIntentTransient = (abs(yawRefDot) > deg2rad(12)) || ...
+                         (abs(yawErrDot) > deg2rad(25));
 
     mzTrack = speedBlend * 0.35 * yawMomentLimit * local_sat(yawNorm, -1, 1);
     mzSlip  = speedBlend * yawMomentLimit * local_sat(betaNorm, -1, 1);
@@ -125,11 +136,19 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
     if betaExcess > 0
         yawMomentCmd = mzTrack + mzSlip;
     else
-        % Keep ESC dormant in benign conditions. This preserves path and
-        % steady-state cornering KPIs; ESC wakes only for large yaw errors.
-        if abs(yawNorm) > 0.35
-            yawDamp = -0.38 * speedBlend * yawMomentLimit * local_sat(yawRateNorm, -1, 1);
-            yawMomentCmd = 0.06 * mzTrack + yawDamp;
+        % During quick steering transients, support yaw build-up first and
+        % then add damping near the target. This improves A3 response and
+        % A1/D1 load-transfer margin without forcing steady A4 cornering.
+        if yawIntentTransient && abs(yawNorm) > 0.28
+            if yawResponseRatio < 0.82
+                yawMomentCmd = 0.20 * mzTrack;
+            else
+                yawDamp = -0.34 * speedBlend * yawMomentLimit * local_sat(yawRateNorm, -1, 1);
+                yawMomentCmd = 0.04 * mzTrack + yawDamp;
+            end
+        elseif abs(yawNorm) > 0.50 && yawResponseRatio > 1.05
+            yawDamp = -0.25 * speedBlend * yawMomentLimit * local_sat(yawRateNorm, -1, 1);
+            yawMomentCmd = yawDamp;
         else
             yawMomentCmd = 0;
         end
@@ -139,8 +158,10 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
 
     %% Housekeeping
     ctrlState.prevError = yawErr;
+    ctrlState.prevYawRateRef = yawRateRefSafe;
     ctrlState.lastSteerAngle = deltaAdd.steerAngle;
     ctrlState.lastYawMoment = deltaAdd.yawMoment;
+    ctrlState.lastYawIntentTransient = yawIntentTransient;
 
     % Pass measured motion states downstream for straight-brake gating.
     deltaAdd.yawRateRef = yawRateRef;
