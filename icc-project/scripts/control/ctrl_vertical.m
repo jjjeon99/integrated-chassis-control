@@ -93,19 +93,37 @@ function [dampingCmd, ctrlState] = ctrl_vertical(suspState, ctrlState, CTRL, dt)
             cCmd = cCmd + 0.05 * (cMax - cMin) * rearSupport;
         end
 
-        % Extra roll-rate damping during fast lane-change transients. This
-        % targets A1/D1 LTR peaks without adding steady yaw/steer action.
-        rollSupport = local_sat(abs(rollVel) / 0.25, 0, 1);
-        cCmd = cCmd + 0.08 * (cMax - cMin) * rollSupport;
+        % Fast anti-roll override for lane-change transients. Skyhook may
+        % fall back to cMin exactly when roll rate is building, so enforce
+        % a higher damping floor instead of adding a tiny correction.
+        rollSupport = local_sat(abs(rollVel) / 0.16, 0, 1);
+        rollFloor = cMin + 0.42 * (cMax - cMin) * rollSupport;
+        cCmd = max(cCmd, rollFloor);
+
+        % If the sprung corner is actively contributing to roll motion,
+        % add extra local damping to blunt the LTR peak.
+        sideSign = 1;
+        if i == 2 || i == 4
+            sideSign = -1;
+        end
+        cornerRollVel = 0.5 * sideSign * rollVel;
+        if zsDot(i) * cornerRollVel > 0
+            cCmd = cCmd + 0.18 * (cMax - cMin) * rollSupport;
+        end
 
         dampingCmd(i) = local_sat(cCmd, cMin, cMax);
     end
 
-    % Light first-order smoothing to avoid harsh coefficient steps.
+    % Asymmetric smoothing: rise immediately for roll control authority,
+    % then release more gently to avoid coefficient chatter.
     if isfield(ctrlState, 'prevDamping')
         prevDamping = local_safe_vec4(ctrlState.prevDamping, cNom);
-        alpha = local_sat(dt / 0.02, 0, 1);  % ~20 ms time constant
-        dampingCmd = prevDamping + alpha * (dampingCmd - prevDamping);
+        deltaCmd = dampingCmd - prevDamping;
+        alphaRise = local_sat(dt / 0.004, 0, 1);
+        alphaFall = local_sat(dt / 0.030, 0, 1);
+        alpha = alphaFall * ones(4, 1);
+        alpha(deltaCmd > 0) = alphaRise;
+        dampingCmd = prevDamping + alpha .* deltaCmd;
         dampingCmd = local_sat(dampingCmd, cMin, cMax);
     end
 
