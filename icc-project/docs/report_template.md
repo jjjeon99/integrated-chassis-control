@@ -290,21 +290,23 @@ deltaBrake = invW * A' * (yawMomentReq / (A * invW * A'));
 
 ### 5.1 KPI 요약
 
-먼저 benchmark 관점의 OFF/ON 비교는 다음과 같다. OFF 값은 baseline run 또는 이전 benchmark 출력에서 확인한 값이며, ON 값은 최신 `grade_report.json` 기준이다.
+먼저 benchmark 관점의 OFF/ON 비교는 다음과 같다. OFF/ON 값은 `run_icc_benchmark.m` 출력(`benchmark_P1_20260623_233234.mat`) 기준이다.
 
 | 시나리오 | KPI | OFF | ON | delta% |
 |---|---:|---:|---:|---:|
-| A1 | sideSlipMax | 3.0154 | 2.8211 | -6.4% |
-| A1 | LTR_max | 0.8635 | 0.7933 | -8.1% |
-| A1 | lateralDevMax | 1.8270 | 1.8599 | +1.8% |
-| A3 | yawRateOvershoot | 2.6997 | 2.9851 | +10.6% |
+| A1 | sideSlipMax | 3.0154 | 2.7734 | -8.0% |
+| A1 | LTR_max | 0.8635 | 0.7640 | -11.5% |
+| A1 | lateralDevMax | 1.8270 | 1.8646 | +2.1% |
+| A1 | yawRateOvershoot | 2310049.1737 | 1716854.8912 | -25.7% |
+| A3 | yawRateOvershoot | 2.6997 | 2.9176 | +8.1% |
 | A4 | sideSlipMax | 1.1839 | 1.1763 | -0.6% |
-| A7 | sideSlipMax | 30.4776 | 2.1271 | -93.0% |
-| A7 | LTR_max | 0.6808 | 0.3591 | -47.3% |
-| B1 | stoppingDistance | 72.2992 | 68.8225 | -4.8% |
-| D1 | sideSlipMax | 4.9057 | 3.1000 | -36.8% |
-| D1 | LTR_max | 0.8635 | 0.7933 | -8.1% |
-| D1 | lateralDevMax | 1.8270 | 1.8599 | +1.8% |
+| A7 | sideSlipMax | 30.4776 | 2.1137 | -93.1% |
+| A7 | LTR_max | 0.6808 | 0.3543 | -48.0% |
+| B1 | stoppingDistance | 72.2992 | 68.7377 | -4.9% |
+| D1 | sideSlipMax | 4.9057 | 3.2234 | -34.3% |
+| D1 | LTR_max | 0.8635 | 0.7640 | -11.5% |
+| D1 | lateralDevMax | 1.8270 | 1.8646 | +2.1% |
+| D1 | yawRateOvershoot | 8601467.6431 | 517722.4585 | -94.0% |
 
 자동 채점 기준의 KPI score breakdown은 다음과 같다.
 
