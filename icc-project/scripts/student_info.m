@@ -19,7 +19,7 @@ function info = student_info()
     % AI 도구 사용 사실 (정직 신고) — 사용 안 했으면 'none'
     %   예: 'ChatGPT used for PID gain tuning suggestion'
     %       'Claude used to debug LQR design'
-    info.ai_usage = '';
+    info.ai_usage = 'Codex';
 
     %% 검증 (수정 금지)
     if contains(info.student_id, 'TODO_FILL')
