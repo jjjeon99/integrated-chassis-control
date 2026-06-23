@@ -35,19 +35,9 @@ $$
 
 선형 tire 영역에서 전후륜 cornering stiffness를 $C_f$, $C_r$라 하면,
 
-$$
-\dot{v}_y =
--\frac{C_f+C_r}{mV_x}v_y
-+ \left(\frac{l_rC_r-l_fC_f}{mV_x}-V_x\right)r
-+ \frac{C_f}{m}\delta
-$$
+$$\dot{v}_y = -\frac{C_f+C_r}{mV_x}v_y + \left(\frac{l_rC_r-l_fC_f}{mV_x}-V_x\right)r + \frac{C_f}{m}\delta$$
 
-$$
-\dot{r} =
-\frac{l_rC_r-l_fC_f}{I_zV_x}v_y
-- \frac{l_f^2C_f+l_r^2C_r}{I_zV_x}r
-+ \frac{l_fC_f}{I_z}\delta
-$$
+$$\dot{r} = \frac{l_rC_r-l_fC_f}{I_zV_x}v_y - \frac{l_f^2C_f+l_r^2C_r}{I_zV_x}r + \frac{l_fC_f}{I_z}\delta$$
 
 이 모델에서 중요한 점은 $V_x$가 커질수록 동일 조향각에 대한 yaw-rate 민감도가 커진다는 것이다. 따라서 고속 영역에서는 feedback/feedforward gain을 그대로 유지하면 overshoot, fishtailing, LTR 증가가 발생한다. 이 때문에 본 설계에서는 속도별 gain scheduling을 핵심 제어기법으로 사용하였다.
 
