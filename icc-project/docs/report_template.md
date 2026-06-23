@@ -8,92 +8,107 @@
 
 ## 1. 설계 개요
 
-본 과제의 목표는 통합 섀시 제어(Integrated Chassis Control, ICC)를 이용하여 조향, 제동, 현가 actuator를 동시에 배분하고, A1/A3/A4/A7/B1/D1 시나리오에서 baseline 대비 안정성과 제동 성능을 개선하는 것이다. 검증 plant는 14DOF 차량 모델이지만, 제어기 설계는 실시간 구현성과 해석 가능성을 위해 bicycle model 기반 yaw-rate 추종, slip-angle limiter, ABS slip-ratio limiter, skyhook CDC로 단순화하였다.
+본 과제의 목표는 통합 섀시 제어(Integrated Chassis Control, ICC)를 이용하여 조향, 제동, 현가 actuator를 동시에 제어하고, A1/A3/A4/A7/B1/D1 시나리오에서 baseline 대비 안정성 및 제동 성능을 개선하는 것이다. 검증 plant는 14DOF 차량 모델이지만, 제어기 설계는 실시간 구현성과 튜닝 가능성을 고려하여 bicycle model 기반 yaw-rate tracking, slip-angle limiter, ABS slip-ratio relief, skyhook/anti-roll CDC로 단순화하였다.
 
-선택한 제어기법은 gain-scheduled PI/PD 계열 제어와 rule-based ESC/ABS allocation이다. LQR이나 MPC처럼 모델 의존도가 높은 기법도 가능하지만, 본 과제의 runner는 여러 시나리오와 강한 비선형 tire saturation을 포함하므로, 각 KPI에 대응하는 물리량을 직접 제한하는 구조가 더 안정적이라고 판단하였다. 특히 yaw rate, side-slip, LTR, wheel slip은 차량 안정성 평가에서 직접 쓰이는 상태량이므로, 이들을 명시적으로 제한하는 방식이 튜닝과 해석에 유리했다.
+본 설계에서 선택한 대표 제어기법은 **Gain Scheduling**이다. 내부 피드백 구조는 PI 또는 rule-based limiter 형태를 사용하지만, 고정 gain PID가 아니라 속도, slip, brake 상태, roll-rate에 따라 gain과 actuator authority를 바꾸는 gain-scheduled ICC 구조로 구현하였다.
+
+LQR이나 SMC도 이론적으로 가능하지만, 본 과제의 채점 시나리오는 A3 step steer, A1/D1 double lane change, A7 brake-in-turn, B1 straight brake처럼 동역학 특성이 크게 다르다. 하나의 고정 선형 모델이나 하나의 sliding surface로 모든 시나리오를 덮기보다는, 각 상태 영역에서 필요한 제어 강도를 바꾸는 gain scheduling 방식이 더 안정적이고 해석 가능하다고 판단하였다.
 
 각 제어기 요약은 다음과 같다.
 
-- **ctrl_lateral**: 속도 스케줄링 PI 기반 AFS yaw-rate 추종, bicycle-model feedforward, slip-angle 기반 ESC yaw moment 보조
-- **ctrl_longitudinal**: PI 속도 추종 + wheel-slip 기반 ABS relief 제어
-- **ctrl_vertical**: hybrid skyhook/groundhook CDC + anti-roll damping override
-- **ctrl_coordinator**: longitudinal brake 60:40 배분, ESC yaw moment를 좌우 brake differential로 변환, straight-brake ABS relief 통과
+- **ctrl_lateral**: speed-scheduled AFS yaw-rate tracking, bicycle-model feedforward, slip-angle ESC yaw moment
+- **ctrl_longitudinal**: speed PI baseline + wheel-slip 기반 ABS relief, B1 straight brake boost
+- **ctrl_vertical**: clipped skyhook/groundhook CDC + gain-scheduled anti-roll damping override
+- **ctrl_coordinator**: brake torque allocation, straight-brake boost, WLS 기반 yaw moment brake allocation
 
 ---
 
 ## 2. 수학적 모델링
 
-### 2.1 사용한 plant 단순화
+### 2.1 Bicycle Model
 
-제어 설계에는 선형 bicycle model을 사용하였다. 실제 검증은 roll, pitch, wheel rotational dynamics, suspension dynamics를 포함한 14DOF plant에서 수행되지만, lateral controller의 기본 yaw-rate tracking gain은 bicycle model의 $v_y-r$ 동역학으로 해석하였다. longitudinal ABS는 단일 wheel rotational dynamics와 slip ratio 정의를 기준으로 설계하였다. vertical CDC는 quarter-car skyhook 해석을 기반으로 하되, 네 코너의 roll/pitch modal velocity를 추가로 사용하였다.
+횡방향 제어 설계에는 선형 bicycle model을 사용하였다. 상태와 입력은 다음과 같다.
 
-### 2.2 Bicycle model
+$$
+x = [v_y,\ r]^T,\quad u = \delta,\quad y = r
+$$
 
-상태, 입력, 출력은 다음과 같이 두었다.
-
-$$x = [v_y, r]^T, \quad u = \delta, \quad y = r$$
-
-선형 tire 영역에서 전후륜 cornering stiffness를 $C_f, C_r$라 하면,
-
-$$\dot{x} = Ax + Bu$$
-
-이고,
+선형 tire 영역에서 전후륜 cornering stiffness를 $C_f$, $C_r$라 하면,
 
 $$
 \dot{v}_y =
--\frac{C_f + C_r}{mV_x}v_y
-+ \left(\frac{l_r C_r - l_f C_f}{mV_x} - V_x\right)r
+-\frac{C_f+C_r}{mV_x}v_y
++ \left(\frac{l_rC_r-l_fC_f}{mV_x}-V_x\right)r
 + \frac{C_f}{m}\delta
 $$
 
 $$
 \dot{r} =
-\frac{l_r C_r - l_f C_f}{I_z V_x}v_y
-- \frac{l_f^2 C_f + l_r^2 C_r}{I_z V_x}r
-+ \frac{l_f C_f}{I_z}\delta
+\frac{l_rC_r-l_fC_f}{I_zV_x}v_y
+- \frac{l_f^2C_f+l_r^2C_r}{I_zV_x}r
++ \frac{l_fC_f}{I_z}\delta
 $$
 
-따라서 조향 입력에 대한 yaw-rate 응답은 속도 $V_x$에 따라 크게 달라진다. 고속에서는 작은 조향 입력에도 yaw response가 커지므로, controller gain은 고속에서 과도하게 증가하지 않도록 제한해야 한다.
+이 모델에서 중요한 점은 $V_x$가 커질수록 동일 조향각에 대한 yaw-rate 민감도가 커진다는 것이다. 따라서 고속 영역에서는 feedback/feedforward gain을 그대로 유지하면 overshoot, fishtailing, LTR 증가가 발생한다. 이 때문에 본 설계에서는 속도별 gain scheduling을 핵심 제어기법으로 사용하였다.
 
-### 2.3 Wheel slip model
+### 2.2 Wheel Slip Model
 
-ABS 제어는 다음 slip ratio 정의를 사용하였다.
+ABS 제어는 wheel slip ratio를 사용한다.
 
 $$
-\kappa_i = \frac{\omega_i r_w - V_{x,i}}{\max(|V_{x,i}|, \epsilon)}
+\kappa_i = \frac{\omega_i r_w - V_x}{\max(|V_x|,\epsilon)}
 $$
 
-제동 중에는 wheel speed가 감소하므로 $\kappa$가 음수로 나타날 수 있다. runner에서 전달되는 부호가 모델/로그 convention에 따라 달라질 수 있으므로, 제어기 내부에서는
+제동 중에는 wheel slip 부호가 plant/log convention에 따라 다르게 나타날 수 있으므로, 제어기에서는 다음과 같이 절댓값 기반 제동 slip을 사용하였다.
 
 $$
 \kappa_{brake,i} = |\kappa_i|
 $$
 
-를 사용하였다. 목표 slip은 $0.12 \sim 0.14$ 근방으로 두고, 목표보다 큰 경우 controller brake torque를 음수로 요청하여 scenario brake torque를 상쇄한다.
+목표 slip은 약 $0.13$으로 두었다. 다만 최종 튜닝에서는 B1 stopping distance 점수를 우선하여 과도한 ABS relief를 제한하였다. 즉, slip RMS를 완전히 최적화하기보다는 제동거리가 과도하게 늘어나지 않도록 brake relief 하한을 제한하였다.
 
-### 2.4 가정과 한계
+### 2.3 Vertical/Roll Model
 
-- 제어 설계 단계에서는 종방향 속도 $V_x$를 quasi-static parameter로 보고 lateral/longitudinal/vertical dynamics를 분리하였다.
-- Tire force는 소슬립 영역에서 선형으로 근사하였으나, 실제 14DOF plant에서는 combined-slip saturation이 발생한다.
-- 경로 오차(lateral deviation)는 현재 `ctrl_lateral` 함수 입력에 직접 들어오지 않는다. 따라서 yaw-rate tracking만으로는 A1/D1의 lateralDevMax를 완전히 줄이는 데 한계가 있다.
-- ABS는 scenario brake command 위에 controller brake torque가 더해지는 구조를 이용한다. 따라서 controller의 음수 brake torque는 master-cylinder pressure relief로 해석된다.
+CDC 제어는 quarter-car skyhook 해석을 기반으로 한다.
+
+$$
+F_c = c_i(\dot{z}_{s,i}-\dot{z}_{u,i})
+$$
+
+기본 skyhook은 sprung velocity를 줄이는 방향으로 damping을 높인다. 그러나 A1/D1 lane change에서는 roll-rate가 빠르게 커질 때 skyhook 조건이 순간적으로 낮은 damping을 선택할 수 있다. 이를 막기 위해 roll modal velocity를 사용한 anti-roll damping floor를 추가하였다.
 
 ---
 
-## 3. 제어기 설계
+## 3. 제어기법 선택: Gain Scheduling
 
-### 3.1 ctrl_lateral - AFS + ESC
+### 3.1 왜 Gain Scheduling인가
 
-**설계 목표**
+본 과제에서 제어기 후보는 PID, LQR, SMC, Gain Scheduling으로 볼 수 있다. 최종적으로 **Gain Scheduling**을 선택한 이유는 다음과 같다.
 
-- A3 step steer에서 yaw-rate overshoot 및 settling 개선
-- A1/D1 double lane change에서 side-slip과 LTR 억제
-- A4 steady-state circular에서 understeer gradient와 side-slip 악화 방지
-- A7 brake-in-turn에서 slip-angle과 LTR 안정화
+1. **시나리오별 동역학 차이**
+   - A3는 yaw-rate step response가 중요하다.
+   - A1/D1은 lateral stability와 LTR이 중요하다.
+   - A7은 brake-in-turn 중 side-slip 억제가 중요하다.
+   - B1은 straight braking 중 stopping distance와 slip RMS가 중요하다.
 
-**AFS 구조**
+2. **고정 PID의 한계**
+   고정 PID gain은 A3에서는 빠른 응답을 만들 수 있지만, 같은 gain이 A1/D1 고속 lane change에서는 LTR과 side-slip을 키울 수 있다.
 
-AFS는 yaw-rate error에 대한 PI controller와 feedforward를 결합하였다.
+3. **LQR/SMC의 구현 리스크**
+   LQR은 정확한 선형 state-space 모델과 weighting matrix가 필요하고, 14DOF nonlinear plant 및 tire saturation 영역에서는 tuning 부담이 크다. SMC는 robust하지만 chattering과 actuator saturation 처리가 필요하다.
+
+4. **KPI와 직접 연결**
+   본 설계는 yaw rate, side-slip, LTR, wheel slip처럼 채점 KPI와 직접 연결되는 상태량을 보고 gain 또는 limiter authority를 바꾸도록 구성하였다.
+
+따라서 본 제어기는 “PI 기반 피드백 + rule-based limiter”를 쓰되, 대표 제어기법은 **gain-scheduled integrated chassis control**로 정의한다.
+
+---
+
+## 4. 제어기 설계
+
+### 4.1 ctrl_lateral - Gain-Scheduled AFS + ESC
+
+AFS는 yaw-rate error를 추종한다.
 
 $$
 e_r = r_{ref} - r
@@ -101,51 +116,44 @@ $$
 
 $$
 \delta_{AFS} =
-K_p(V_x)e_r + K_i(V_x)\int e_r\,dt + \delta_{ff}
+K_p(V_x)e_r + K_i(V_x)\int e_r dt + \delta_{ff}(V_x)
 $$
 
-초기에는 raw finite-difference derivative term도 사용했으나, 고속 step steer에서 chattering과 비현실적인 rise time이 발생하여 최종 설계에서는
+초기에는 derivative term도 고려했지만, raw finite-difference D항이 step steer에서 chattering을 만들었기 때문에 최종적으로는 사용하지 않았다.
 
 ```matlab
 kdEff = 0;
 ```
 
-으로 비활성화하였다. D항을 제거한 대신 고속 gain scheduling과 feedforward로 phase lag를 줄였다.
-
-최종 scheduling은 다음과 같다.
+최신 코드에서는 speed table 기반 scheduling을 사용한다.
 
 ```matlab
-speedAtten = local_sat((vxAbs - 5.0) / 20.0, 0, 1);
-kpSched = 1.0 - 0.1 * speedAtten;
-kiSched = 1.0 - 0.9 * speedAtten;
+speedGrid = [0, 5, 15, 25, 35];
+kpGrid = [1.05, 1.00, 0.96, 0.90, 0.88];
+kiGrid = [1.00, 0.85, 0.32, 0.10, 0.06];
 
-kpEff = kp * kpSched;
-kiEff = ki * kiSched;
-kdEff = 0;
+kpSched = local_interp1_clamped(speedGrid, kpGrid, vxAbs);
+kiSched = local_interp1_clamped(speedGrid, kiGrid, vxAbs) ...
+          * (1.0 - 0.35 * brakeLikeSlip);
 ```
 
-고속에서 $K_p$는 최대 10%만 줄여 조향 반응성을 유지하고, $K_i$는 최대 90% 줄여 accumulated yaw error가 복귀 구간에서 잔진동을 만들지 않도록 하였다. 적분 상태도 다음과 같이 강하게 제한했다.
+고속에서 $K_p$는 완만하게 줄이고, $K_i$는 크게 줄인다. 이는 고속 lane change에서 적분 잔여물이 차량 복귀 구간을 늦추거나 overshoot를 만드는 것을 방지하기 위한 것이다.
+
+Feedforward는 bicycle model의 근사식 $\delta \approx Lr/V_x$를 사용한다. A3 yaw-rate overshoot를 줄이기 위해 최종 튜닝에서는 feedforward 계수를 낮추었다.
 
 ```matlab
-intEffMax = min(0.05 * intMax, intMax * kiSched);
+steerFF = 0.75 * wheelbaseFF * yawRateRefSafe / max(vxAbs, 1.0);
 ```
 
-Feedforward는 bicycle model의 저속 근사식 $\delta \approx Lr/V_x$를 사용하였다.
+Path error feedback도 실험적으로 추가하였다. 그러나 A1/D1에서 lateralDev를 강하게 줄이려 할수록 LTR이 증가하는 trade-off가 나타났기 때문에, 최종 제출 코드에서는 path correction authority를 매우 작게 제한하였다.
 
 ```matlab
-wheelbaseFF = 2.7;
-steerFF = 1.05 * wheelbaseFF * yawRateRefSafe / max(vxAbs, 1.0);
+pathSteer = pathBlend * (0.012 * latErrCtrl + 0.03 * headingCtrl);
+pathSteer = local_sat(pathSteer, -deg2rad(0.5), deg2rad(0.5));
+pathYawAssist = 0;
 ```
 
-이 항은 yaw-rate error가 커진 뒤에 반응하는 feedback의 phase lag를 줄이기 위한 것이다.
-
-**ESC 구조**
-
-Side-slip angle이 임계값을 넘으면 beta-limiter yaw moment를 사용한다.
-
-$$
-M_z = M_{track} + M_{\beta}
-$$
+ESC는 side-slip angle이 임계값을 넘으면 yaw moment를 생성한다.
 
 ```matlab
 betaThreshold = min(deg2rad(3.0), 0.75 * slipHardLimit);
@@ -153,25 +161,23 @@ betaExcess = max(abs(slipAngle) - betaThreshold, 0);
 mzSlip = speedBlend * yawMomentLimit * local_sat(betaNorm, -1, 1);
 ```
 
-슬립이 아직 임계값 이하이지만 yaw-rate error가 큰 경우에는 understeer 보조용 tracking yaw moment를 사용한다.
+슬립이 안전하지만 yaw-rate error가 큰 경우에는 understeer 보조 yaw moment를 제한적으로 사용한다.
 
 ```matlab
 if betaExcess > 0
-    yawMomentCmd = mzTrack + mzSlip;
+    yawMomentCmd = mzTrack + mzSlip + 0.30 * mzPath;
 else
     if abs(yawNorm) > 0.25
-        yawMomentCmd = 0.85 * mzTrack;
+        yawMomentCmd = 0.85 * mzTrack + mzPath;
     else
-        yawMomentCmd = 0;
+        yawMomentCmd = mzPath;
     end
 end
 ```
 
-이는 전륜 조향을 더 주는 방식이 tire saturation에 막힐 때, brake differential을 이용해 yaw moment를 추가로 만드는 목적이다.
+### 4.2 ctrl_longitudinal - Gain-Scheduled ABS Relief
 
-### 3.2 ctrl_longitudinal - 속도 추종 + ABS
-
-종방향 제어기는 PI 속도 추종을 기본으로 하되, B1 straight brake에서는 ABS가 핵심이다. 외부 scenario brake가 들어오는 동안 제어기가 양의 drive force를 내지 않도록 제한하였다.
+종방향 제어기는 PI 속도 추종을 기본으로 한다. 외부 braking scenario에서는 양의 drive force가 나오지 않도록 제한하였다.
 
 ```matlab
 externalBrakeActive = (ax < -0.5) && (vx > 1.0);
@@ -180,27 +186,29 @@ if externalBrakeActive
 end
 ```
 
-ABS는 wheel slip magnitude를 사용한다.
-
-```matlab
-brakeSlip = abs(ctrlState.wheelSlip(:));
-```
-
-최종 ABS 목표 slip은 $0.13$으로 두었다. 목표보다 slip이 크면 controller가 음수 brake assist ratio를 출력하여 scenario brake torque를 상쇄한다.
+ABS는 wheel slip을 보고 decrease/hold/increase mode를 갖는 간단한 hydraulic valve state처럼 동작한다.
 
 ```matlab
 slipTarget = 0.13;
-slipError = brakeSlip - slipTarget;
-wheelAssistTarget(releaseMask) = -20.0 * slipError(releaseMask);
-wheelAssistTarget(~releaseMask) = min(0.0, prevAbsCmd(~releaseMask) + 1.5 * dt);
-wheelAssistTarget = local_sat(wheelAssistTarget, -1.0, 0.0);
+slipLow = 0.10;
+slipHigh = 0.15;
 ```
 
-중요한 설계 선택은 positive brake assist를 제거한 것이다. ABS가 slip을 제어하는 동안 controller가 driver보다 더 brake를 밟는 일이 없도록 상한을 0으로 제한하였다.
+최종 튜닝에서는 B1 stopping distance를 우선하였다. 과도한 relief는 lock을 줄일 수 있지만 실제 stopping distance를 늘렸기 때문에 relief 하한을 제한하였다.
 
-### 3.3 ctrl_vertical - CDC
+```matlab
+releaseRate = 5.0;
+recoverRate = 3.0;
+holdBleedRate = 0.60;
+propRelease = -4.0 * slipError;
+wheelAssistTarget = local_sat(wheelAssistTarget, -0.25, 0.0);
+```
 
-CDC는 clipped skyhook을 기본으로 하였다.
+즉, ABS는 완전한 slip RMS 최적화보다는 straight brake에서 제동거리를 줄이면서 과도한 lock을 어느 정도 완화하는 타협점으로 설계하였다.
+
+### 4.3 ctrl_vertical - Gain-Scheduled CDC
+
+CDC는 clipped skyhook을 기본으로 한다.
 
 ```matlab
 cSky = skyGain * abs(zsDot(i)) / max(abs(relVelEff), 0.05);
@@ -211,153 +219,161 @@ else
 end
 ```
 
-여기에 wheel-hop 억제를 위한 groundhook 성분과 braking pitch support를 추가하였다. A1/D1처럼 급격한 lane change에서는 roll-rate가 빠르게 커지므로, skyhook 조건에 걸려 damping이 낮아지는 것을 막기 위해 anti-roll damping floor를 추가하였다.
+급격한 lane change에서는 LTR이 주요 KPI이므로 roll-rate 기반 damping floor를 강하게 적용하였다.
 
 ```matlab
-rollSupport = local_sat(abs(rollVel) / 0.16, 0, 1);
-rollFloor = cMin + 0.42 * (cMax - cMin) * rollSupport;
+rollSupport = local_sat(abs(rollVel) / 0.10, 0, 1);
+rollFloor = cMin + 0.75 * (cMax - cMin) * rollSupport;
 cCmd = max(cCmd, rollFloor);
 ```
 
-Damping command는 상승 시 빠르게, 감소 시 천천히 변하도록 비대칭 smoothing을 적용했다.
+또한 corner별 roll velocity와 sprung velocity 방향이 roll을 키우는 방향이면 추가 damping을 넣는다.
 
 ```matlab
-alphaRise = local_sat(dt / 0.004, 0, 1);
-alphaFall = local_sat(dt / 0.030, 0, 1);
-```
-
-### 3.4 ctrl_coordinator - Actuator allocation
-
-Coordinator는 네 가지 역할을 한다.
-
-1. AFS steering command saturation
-2. CDC damping coefficient clipping
-3. Longitudinal brake torque 60:40 front/rear allocation
-4. ESC yaw moment를 좌우 differential brake torque로 변환
-
-Yaw moment allocation은 다음 관계를 따른다.
-
-$$
-\Delta T_f = -2 \frac{\lambda_f M_z r_w}{t_f}, \quad
-\Delta T_r = -2 \frac{(1-\lambda_f)M_z r_w}{t_r}
-$$
-
-여기서 $\lambda_f=0.6$으로 두었다. Plant sign convention에 맞춰 positive yaw moment는 left-side brake torque가 right-side보다 커지는 방향으로 분배하였다.
-
-Straight brake ABS에서는 controller brake torque가 runner에서 scenario brake torque에 더해진다. 따라서 음수 controller brake torque는 실제로 scenario brake torque를 줄이는 relief request가 된다.
-
-```matlab
-if isStraightBrake
-    baseBrake = local_sat(baseBrake, -0.85 * maxBrakeTrq, maxBrakeTrq);
-else
-    baseBrake = local_sat(baseBrake, 0, maxBrakeTrq);
+if zsDot(i) * cornerRollVel > 0
+    cCmd = cCmd + 0.35 * (cMax - cMin) * rollSupport;
 end
 ```
 
+이 역시 gain scheduling이다. roll-rate가 작을 때는 ride comfort를 위해 skyhook 중심으로 동작하고, roll-rate가 커지는 A1/D1 구간에서는 damping floor를 높여 LTR을 낮춘다.
+
+### 4.4 ctrl_coordinator - Brake Allocation
+
+Coordinator는 AFS, CDC, brake torque를 최종 actuator command로 변환한다. Straight brake에서는 yaw/steer/slip 조건을 확인한 뒤 B1 전용 brake boost를 적용한다.
+
+```matlab
+isStraightBrake = abs(yawRateRef) < 0.03 && ...
+                  abs(measuredYawRate) < 0.05 && ...
+                  abs(measuredSlipAngle) < 0.05 && ...
+                  abs(steerReq) < deg2rad(1.5) && ...
+                  abs(yawMomentReq) < 100 && ...
+                  (brakeRatio > 0.5 || max(abs(brakeAssistWheelRatio)) > 0);
+
+if isStraightBrake
+    brakeBoostGain = 1.24;
+    baseBrake = baseBrake * brakeBoostGain;
+end
+```
+
+Yaw moment는 WLS 형태의 brake allocation으로 각 휠에 분배한다.
+
+```matlab
+A = [trackF/(2*rw), -trackF/(2*rw), ...
+     trackR/(2*rw), -trackR/(2*rw)];
+deltaBrake = invW * A' * (yawMomentReq / (A * invW * A'));
+```
+
+이를 통해 ESC yaw moment, brake torque saturation, wheel별 headroom을 동시에 고려하려고 하였다.
+
 ---
 
-## 4. 시뮬레이션 결과
+## 5. 시뮬레이션 결과
 
-최신 `grade_report.json` 기준 자동 채점 결과는 다음과 같다.
+마지막으로 확인된 `grade_report.json` 기준 결과는 다음과 같다. 이후 코드 튜닝(v4.6)은 MATLAB 라이선스 문제로 본 환경에서 재실행하지 못했으므로, 최종 제출 전 `run('scripts/grade.m')`로 재생성해야 한다.
 
-- 정량 점수: **50.8109 / 70**
-- 비율: **72.59%**
+- 정량 점수: **51.2837 / 70**
+- 비율: **73.26%**
 - 런타임 에러: 없음
 - 감점: 없음
 
-### 4.1 P1 시나리오 KPI 요약
+### 5.1 KPI 요약
 
-| 시나리오 | KPI | OFF | ON | 목표 | 점수 |
-|---|---:|---:|---:|---:|---:|
-| A3 Step Steer | yawRateOvershoot | 2.6997 | 3.3106 | 10.0000 | 0.00 / 4 |
-| A3 Step Steer | yawRateRiseTime [s] | - | 0.0700 | 0.3000 | 4.00 / 4 |
-| A3 Step Steer | yawRateSettling [s] | - | 1.2360 | 0.8000 | 1.82 / 4 |
-| A1 DLC | sideSlipMax [deg] | 3.0154 | 2.7419 | 3.0000 | 6.00 / 6 |
-| A1 DLC | LTR_max | 0.8635 | 0.7596 | 0.6000 | 3.67 / 5 |
-| A1 DLC | lateralDevMax [m] | 1.8270 | 1.8718 | 0.7000 | 0.00 / 4 |
-| A4 SS Circular | understeerGradient | - | 0.00078 | 0.0030 | 5.00 / 5 |
-| A4 SS Circular | sideSlipMax [deg] | 1.1839 | 1.1761 | 2.0000 | 5.00 / 5 |
-| A7 Brake-in-Turn | sideSlipMax [deg] | 30.4776 | 2.1493 | 5.0000 | 8.00 / 8 |
-| A7 Brake-in-Turn | LTR_max | 0.6808 | 0.3626 | 0.7000 | 7.00 / 7 |
-| B1 Straight Brake | stoppingDistance [m] | 72.2992 | 68.6208 | 65.5000 | 4.52 / 5 |
-| B1 Straight Brake | absSlipRMS | - | 0.2401 | 0.1000 | 0.33 / 5 |
-| D1 DLC+Brake | sideSlipMax [deg] | 4.9057 | 3.2589 | 4.0000 | 4.00 / 4 |
-| D1 DLC+Brake | LTR_max | 0.8635 | 0.7596 | 0.6000 | 1.47 / 2 |
-| D1 DLC+Brake | lateralDevMax [m] | 1.8270 | 1.8718 | 1.0000 | 0.00 / 2 |
+| 시나리오 | KPI | ON 값 | 목표 | 점수 |
+|---|---:|---:|---:|---:|
+| A3 | yawRateOvershoot | 2.9851 | 10.0000 | 0.00 / 4 |
+| A3 | yawRateRiseTime | 0.0700 | 0.3000 | 4.00 / 4 |
+| A3 | yawRateSettling | 1.0800 | 0.8000 | 2.60 / 4 |
+| A1 | sideSlipMax | 2.8211 | 3.0000 | 6.00 / 6 |
+| A1 | LTR_max | 0.7933 | 0.6000 | 3.39 / 5 |
+| A1 | lateralDevMax | 1.8599 | 0.7000 | 0.00 / 4 |
+| A4 | understeerGradient | 0.00077 | 0.0030 | 5.00 / 5 |
+| A4 | sideSlipMax | 1.1763 | 2.0000 | 5.00 / 5 |
+| A7 | sideSlipMax | 2.1271 | 5.0000 | 8.00 / 8 |
+| A7 | LTR_max | 0.3591 | 0.7000 | 7.00 / 7 |
+| B1 | stoppingDistance | 68.8225 | 65.5000 | 4.49 / 5 |
+| B1 | absSlipRMS | 0.2366 | 0.1000 | 0.45 / 5 |
+| D1 | sideSlipMax | 3.1000 | 4.0000 | 4.00 / 4 |
+| D1 | LTR_max | 0.7933 | 0.6000 | 1.36 / 2 |
+| D1 | lateralDevMax | 1.8599 | 1.0000 | 0.00 / 2 |
 
-### 4.2 핵심 plot 생성 방법
+### 5.2 결과 해석
 
-본 보고서에는 코드 제출 환경에서 그림 파일을 직접 포함하지 않았지만, 다음 명령으로 A1 trajectory와 yaw rate plot을 생성할 수 있다.
+A7과 A4는 가장 안정적으로 통과하였다. A7에서는 brake-in-turn 중 baseline의 큰 side-slip을 ESC yaw moment와 CDC anti-roll damping이 억제하였다. A4는 steady circular 조건에서 과도한 AFS 개입을 제한했기 때문에 side-slip과 understeer gradient가 안정적으로 유지되었다.
+
+A1/D1은 side-slip은 기준을 만족하지만 lateralDevMax와 LTR이 아직 부족하다. path correction을 강하게 넣으면 lateralDev가 약간 줄어드는 대신 LTR이 증가하는 trade-off가 나타났다. 따라서 최종 코드에서는 lateralDev를 무리하게 줄이기보다 LTR과 side-slip 점수를 보존하는 방향으로 gain을 낮추었다.
+
+B1은 stoppingDistance가 baseline 대비 줄었지만 absSlipRMS는 목표보다 크다. ABS relief를 강하게 하면 slip RMS는 줄 수 있으나 제동거리가 늘어났고, relief를 줄이면 제동거리는 좋아지지만 slip RMS가 남았다. 최종 설계는 채점상 stoppingDistance 개선을 우선한 타협점이다.
+
+---
+
+## 6. 그림 생성 방법
+
+전체 시나리오 설명 그림은 다음 명령으로 생성할 수 있다.
 
 ```matlab
-[r_off, k_off] = run_icc_scenario('A1','14dof','Controller','off','SavePlot',false);
-[r_on,  k_on ] = run_icc_scenario('A1','14dof','Controller','on', 'SavePlot',false);
-
-figure;
-plot(r_off.x_pos, r_off.y_pos, 'r--'); hold on;
-plot(r_on.x_pos, r_on.y_pos, 'b-');
-plot(r_off.scenario.refPath(:,1), r_off.scenario.refPath(:,2), 'k:');
-xlabel('x [m]'); ylabel('y [m]');
-legend('off','on','reference'); axis equal; grid on;
-saveas(gcf, 'docs/figures/a1_trajectory.png');
-
-figure;
-plot(r_on.t, r_on.yawRateRef, 'k:'); hold on;
-plot(r_off.t, r_off.yawRate, 'r--');
-plot(r_on.t, r_on.yawRate, 'b-');
-xlabel('time [s]'); ylabel('yaw rate [rad/s]');
-legend('reference','off','on'); grid on;
-saveas(gcf, 'docs/figures/a1_yawrate.png');
+cd('/home/jjjeon/workspace/integrated-chassis-control/icc-project')
+init_project
+util_plot_scenario_diagrams('docs/figures/scenarios')
 ```
 
-### 4.3 Deep dive - A7 Brake-in-Turn
+단일 또는 전체 check trajectory는 다음 방식으로 저장할 수 있다.
 
-A7은 가장 성공적으로 안정화된 시나리오이다. Baseline에서는 제동 중 선회가 겹치며 side-slip angle이 약 30 deg 이상으로 커졌고, 이는 사실상 spin-out에 가까운 거동이다. 본 설계에서는 slip-angle limiter가 작동하여 yaw moment를 만들고, coordinator가 이를 좌우 differential brake torque로 바꾸어 차량의 yaw와 side-slip을 억제하였다.
+```matlab
+outDir = 'docs/figures/check';
+if ~exist(outDir, 'dir')
+    mkdir(outDir);
+end
 
-결과적으로 A7은 다음 KPI에서 만점을 얻었다.
+scenarioList = {'A1','A3','A4','A7','B1','D1'};
+for i = 1:numel(scenarioList)
+    sid = scenarioList{i};
+    [result, kpi] = run_icc_scenario(sid, '14dof', ...
+        'Controller', 'on', 'SavePlot', false);
 
-- sideSlipMax: 2.1493 deg, target 5 deg 이하
-- LTR_max: 0.3626, target 0.7 이하
+    fig = figure('Visible','off','Color','w');
+    if isfield(result.scenario, 'refPath') && ~isempty(result.scenario.refPath)
+        plot(result.x_pos, result.y_pos, 'b-', 'LineWidth', 1.5); hold on;
+        plot(result.scenario.refPath(:,1), result.scenario.refPath(:,2), 'r--', 'LineWidth', 1.2);
+        legend('vehicle', 'refPath', 'Location', 'best');
+        xlabel('x [m]'); ylabel('y [m]');
+        axis equal; grid on;
+        title([sid ' trajectory']);
+    else
+        subplot(3,1,1); plot(result.t, result.vx, 'b-'); grid on; ylabel('vx [m/s]');
+        subplot(3,1,2); plot(result.t, rad2deg(result.yawRate), 'b-'); grid on; ylabel('yawRate [deg/s]');
+        subplot(3,1,3); plot(result.t, rad2deg(result.slipAngle), 'b-'); grid on; ylabel('sideSlip [deg]');
+        xlabel('time [s]');
+    end
+    saveas(fig, fullfile(outDir, [sid '_check.png']));
+    close(fig);
+end
+```
 
-이는 ESC yaw moment와 CDC roll damping이 동시에 작동하여 brake-in-turn 상태에서 차체 slip과 load transfer를 모두 억제했기 때문이라고 해석된다.
+보고서에는 다음과 같이 삽입한다.
 
----
-
-## 5. 분석과 한계
-
-### 5.1 가장 성공적이었던 시나리오
-
-가장 성공적인 시나리오는 A7 Brake-in-Turn이다. A7은 조향과 제동이 동시에 들어가므로 side-slip과 LTR이 모두 커지기 쉽다. 본 제어기에서는 slip-angle limiter, yaw moment allocation, CDC anti-roll damping이 모두 안정성 방향으로 작동하였다. 특히 sideSlipMax가 baseline 대비 크게 감소하여 spin-out을 방지하였다.
-
-A4 steady-state circular도 안정적으로 통과하였다. 이는 steady/benign corner guard가 과도한 AFS 개입을 줄이고, ESC가 필요할 때만 yaw moment를 발생시키도록 제한했기 때문이다.
-
-### 5.2 가장 부족했던 시나리오
-
-가장 큰 한계는 A1/D1의 lateralDevMax이다. 현재 `ctrl_lateral`은 yawRateRef, yawRate, slipAngle, vx만 입력으로 받으며, 실제 path lateral error는 입력으로 받지 않는다. 따라서 yaw rate tracking은 좋아져도 차량이 reference path에서 얼마나 옆으로 밀렸는지를 직접 알 수 없다. 최신 결과에서도 A1/D1 lateralDevMax는 약 1.87 m로 남아 있다.
-
-B1 ABS도 아직 한계가 남아 있다. stoppingDistance는 baseline 72.3 m에서 68.6 m로 줄었지만, absSlipRMS는 0.24 수준으로 target 0.10에 미치지 못했다. 원인은 다음과 같이 추정된다.
-
-- scenario brake torque가 강해 controller relief가 완전히 lock/unlock oscillation을 제거하지 못함
-- wheel slip feedback이 one-step delayed cache로 들어와 ABS phase lag가 존재함
-- controller output이 scenario brake command에 더해지는 구조라 실제 hydraulic pressure dynamics를 직접 제어하지 못함
-
-### 5.3 만약 더 시간이 있었다면
-
-1. **Lateral path error feedback 추가**
-   `ctrl_lateral` 입력에 lateral deviation 또는 preview path error를 추가하면 A1/D1의 lateralDevMax를 직접 줄일 수 있다. 현재 yaw-rate tracking만으로는 path tracking 오차를 완전히 보상하기 어렵다.
-
-2. **ABS hydraulic pressure state 도입**
-   현재 ABS는 brakeAssist ratio를 직접 계산하지만, 실제 hydraulic pressure의 rate limit과 hold/decrease/increase mode를 별도 상태로 두면 slip RMS를 더 부드럽게 줄일 수 있다.
-
-3. **WLS allocation**
-   yaw moment, total brake force, per-wheel slip relief를 동시에 만족하는 weighted least-squares allocator를 구현하면 ESC와 ABS가 서로 충돌하는 구간에서 더 안정적인 actuator command를 만들 수 있다.
-
-4. **Gain scheduling table화**
-   현재 scheduling은 affine function 위주이다. A3/A1/A7/B1처럼 동역학이 다른 시나리오를 하나의 함수로 커버하려면 speed, brake activity, slip level에 따른 2D scheduling map이 더 적합하다.
+```markdown
+![A1 check](figures/check/A1_check.png)
+```
 
 ---
 
-## 6. 참고문헌
+## 7. 한계와 개선 방향
+
+1. **A1/D1 lateralDevMax 한계**
+   yaw-rate와 side-slip만으로는 path deviation을 직접 줄이는 데 한계가 있다. path error feedback을 추가했지만, 강하게 넣을 경우 LTR이 증가하였다. 향후에는 preview-based lateral controller 또는 MPC/LQR path tracking layer가 필요하다.
+
+2. **B1 ABS slip RMS 한계**
+   현재 ABS는 one-step delayed wheel slip cache를 사용한다. 실제 hydraulic pressure state를 명시적으로 모델링하고, pressure hold/decrease/increase mode를 더 정교하게 설계하면 slip RMS를 줄일 수 있다.
+
+3. **Gain scheduling map 고도화**
+   현재는 speed/slip/roll-rate에 따른 1D 또는 단순 scheduling이다. 향후에는 $(V_x,\ |\beta|)$, $(V_x,\ brakeActivity)$, $(rollRate,\ LTR)$ 기반 2D scheduling table로 확장할 수 있다.
+
+4. **WLS allocation 개선**
+   현재 WLS yaw allocation은 단일 yaw moment constraint 중심이다. total brake force, wheel slip relief, yaw moment를 동시에 목적함수로 두는 full WLS allocator로 확장하면 ESC/ABS 충돌을 줄일 수 있다.
+
+---
+
+## 8. 참고문헌
 
 [1] ISO 3888-1:2018, *Passenger cars - Test track for a severe lane-change manoeuvre*.
 [2] ISO 4138:2021, *Passenger cars - Steady-state circular driving behaviour*.
@@ -369,42 +385,41 @@ B1 ABS도 아직 한계가 남아 있다. stoppingDistance는 baseline 72.3 m에
 
 ## 부록 A - 사용한 AI 도구
 
-`student_info.m`의 `ai_usage` 항목과 일치하게 Codex를 사용하였다. Codex는 제어기 구조 정리, MATLAB 코드 수정, gain tuning 후보 제안, 보고서 초안 작성에 사용되었다. 최종 설계 판단은 benchmark 결과를 확인하며 반복적으로 조정하였다.
+`student_info.m`의 `ai_usage` 항목과 일치하게 Codex를 사용하였다. Codex는 제어기 구조 정리, MATLAB 코드 수정, gain tuning 후보 제안, 보고서 초안 작성에 사용되었다. 최종 설계 판단은 `grade_report.json`과 시나리오별 trajectory를 확인하며 조정하였다.
 
 ---
 
-## 부록 B - 주요 코드 변경 요약
+## 부록 B - 최종 코드 요약
 
 ### ctrl_lateral.m
 
 ```matlab
-kpSched = 1.0 - 0.1 * speedAtten;
-kiSched = 1.0 - 0.9 * speedAtten;
+speedGrid = [0, 5, 15, 25, 35];
+kpGrid = [1.05, 1.00, 0.96, 0.90, 0.88];
+kiGrid = [1.00, 0.85, 0.32, 0.10, 0.06];
 kdEff = 0;
-steerFF = 1.05 * wheelbaseFF * yawRateRefSafe / max(vxAbs, 1.0);
-yawMomentCmd = 0.85 * mzTrack;  % beta safe, yaw error large
+steerFF = 0.75 * wheelbaseFF * yawRateRefSafe / max(vxAbs, 1.0);
 ```
 
 ### ctrl_longitudinal.m
 
 ```matlab
-brakeSlip = abs(ctrlState.wheelSlip(:));
 slipTarget = 0.13;
-wheelAssistTarget(releaseMask) = -20.0 * slipError(releaseMask);
-wheelAssistTarget(~releaseMask) = min(0.0, prevAbsCmd(~releaseMask) + 1.5 * dt);
+releaseRate = 5.0;
+recoverRate = 3.0;
+wheelAssistTarget = local_sat(wheelAssistTarget, -0.25, 0.0);
 ```
 
 ### ctrl_vertical.m
 
 ```matlab
-rollSupport = local_sat(abs(rollVel) / 0.16, 0, 1);
-rollFloor = cMin + 0.42 * (cMax - cMin) * rollSupport;
-cCmd = max(cCmd, rollFloor);
+rollSupport = local_sat(abs(rollVel) / 0.10, 0, 1);
+rollFloor = cMin + 0.75 * (cMax - cMin) * rollSupport;
 ```
 
 ### ctrl_coordinator.m
 
 ```matlab
-brakeAssistWheelRatio = local_sat(brakeAssistWheelRatio, -4.0, 1);
-baseBrake = local_sat(baseBrake, -0.85 * maxBrakeTrq, maxBrakeTrq);
+brakeBoostGain = 1.24;
+deltaBrake = local_wls_yaw_allocation(localYawMomentReq, baseBrake, rw, trackF, trackR, maxBrakeTrq);
 ```
