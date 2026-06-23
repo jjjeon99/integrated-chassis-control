@@ -373,8 +373,6 @@ B1은 stoppingDistance가 baseline 대비 줄었지만 absSlipRMS는 목표보�
 [1] ISO 3888-1:2018, *Passenger cars - Test track for a severe lane-change manoeuvre*.
 [2] ISO 4138:2021, *Passenger cars - Steady-state circular driving behaviour*.
 [3] R. Rajamani, *Vehicle Dynamics and Control*, 2nd ed., Springer, 2012.
-[4] J. Y. Wong, *Theory of Ground Vehicles*, 4th ed., Wiley, 2008.
-[5] T. D. Gillespie, *Fundamentals of Vehicle Dynamics*, SAE International, 1992.
 
 ---
 
