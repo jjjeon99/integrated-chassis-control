@@ -39,6 +39,21 @@ $$\dot{v}_y = -\frac{C_f+C_r}{mV_x}v_y + \left(\frac{l_rC_r-l_fC_f}{mV_x}-V_x\ri
 
 $$\dot{r} = \frac{l_rC_r-l_fC_f}{I_zV_x}v_y - \frac{l_f^2C_f+l_r^2C_r}{I_zV_x}r + \frac{l_fC_f}{I_z}\delta$$
 
+이를 state-space 형태로 쓰면 다음과 같다.
+
+$$\dot{x}=Ax+Bu,\quad y=Cx+Du$$
+
+$$A=\begin{bmatrix}
+-\frac{C_f+C_r}{mV_x} & \frac{l_rC_r-l_fC_f}{mV_x}-V_x \\
+\frac{l_rC_r-l_fC_f}{I_zV_x} & -\frac{l_f^2C_f+l_r^2C_r}{I_zV_x}
+\end{bmatrix},\quad
+B=\begin{bmatrix}
+\frac{C_f}{m} \\
+\frac{l_fC_f}{I_z}
+\end{bmatrix}$$
+
+$$C=\begin{bmatrix}0 & 1\end{bmatrix},\quad D=0$$
+
 이 모델에서 중요한 점은 $V_x$가 커질수록 동일 조향각에 대한 yaw-rate 민감도가 커진다는 것이다. 따라서 고속 영역에서는 feedback/feedforward gain을 그대로 유지하면 overshoot, fishtailing, LTR 증가가 발생한다. 이 때문에 본 설계에서는 속도별 gain scheduling을 핵심 제어기법으로 사용하였다.
 
 ### 2.2 Wheel Slip Model
@@ -128,6 +143,13 @@ kiSched = local_interp1_clamped(speedGrid, kiGrid, vxAbs) ...
 ```
 
 고속에서 $K_p$는 완만하게 줄이고, $K_i$는 크게 줄인다. 이는 고속 lane change에서 적분 잔여물이 차량 복귀 구간을 늦추거나 overshoot를 만드는 것을 방지하기 위한 것이다.
+
+Gain tuning은 다음 순서로 진행하였다.
+
+1. **기본 yaw-rate 응답 확보**: A3 step steer에서 rise time이 0.3 s 이내가 되도록 저속/중속 $K_p$를 유지하였다.
+2. **고속 안정성 확보**: A1/D1에서 고속 조향 gain이 크면 LTR과 side-slip이 증가하므로, speed table에서 25 m/s 이상 $K_p$를 0.90 이하로 낮추었다.
+3. **적분항 억제**: DLC 복귀 구간에서 $K_i$가 남아 있으면 yaw-rate settling이 길어지므로, 고속 $K_i$는 0.10 이하로 줄였다.
+4. **feedforward 재조정**: 초기에는 $\delta_{ff}=1.05Lr_{ref}/V_x$를 사용했으나 A3 overshoot가 baseline보다 커져 최종적으로 0.75 계수로 낮추었다.
 
 Feedforward는 bicycle model의 근사식 $\delta \approx Lr/V_x$를 사용한다. A3 yaw-rate overshoot를 줄이기 위해 최종 튜닝에서는 feedforward 계수를 낮추었다.
 
@@ -268,6 +290,24 @@ deltaBrake = invW * A' * (yawMomentReq / (A * invW * A'));
 
 ### 5.1 KPI 요약
 
+먼저 benchmark 관점의 OFF/ON 비교는 다음과 같다. OFF 값은 baseline run 또는 이전 benchmark 출력에서 확인한 값이며, ON 값은 최신 `grade_report.json` 기준이다.
+
+| 시나리오 | KPI | OFF | ON | delta% |
+|---|---:|---:|---:|---:|
+| A1 | sideSlipMax | 3.0154 | 2.8211 | -6.4% |
+| A1 | LTR_max | 0.8635 | 0.7933 | -8.1% |
+| A1 | lateralDevMax | 1.8270 | 1.8599 | +1.8% |
+| A3 | yawRateOvershoot | 2.6997 | 2.9851 | +10.6% |
+| A4 | sideSlipMax | 1.1839 | 1.1763 | -0.6% |
+| A7 | sideSlipMax | 30.4776 | 2.1271 | -93.0% |
+| A7 | LTR_max | 0.6808 | 0.3591 | -47.3% |
+| B1 | stoppingDistance | 72.2992 | 68.8225 | -4.8% |
+| D1 | sideSlipMax | 4.9057 | 3.1000 | -36.8% |
+| D1 | LTR_max | 0.8635 | 0.7933 | -8.1% |
+| D1 | lateralDevMax | 1.8270 | 1.8599 | +1.8% |
+
+자동 채점 기준의 KPI score breakdown은 다음과 같다.
+
 | 시나리오 | KPI | ON 값 | 목표 | 점수 |
 |---|---:|---:|---:|---:|
 | A3 | yawRateOvershoot | 2.9851 | 10.0000 | 0.00 / 4 |
@@ -298,6 +338,8 @@ deltaBrake = invW * A' * (yawMomentReq / (A * invW * A'));
 
 ![A7 brake-in-turn response](figures/a7_response.png)
 *Figure 5.3 - A7 brake-in-turn response. ESC yaw moment와 CDC anti-roll damping이 side-slip을 억제한 사례이다.*
+
+A7은 본 설계에서 가장 명확하게 개선된 시나리오이다. Brake-in-turn에서는 제동으로 전륜 하중이 증가하고 후륜 안정성이 낮아지면서 side-slip이 빠르게 커질 수 있다. 본 제어기는 $\beta$가 임계값에 접근하면 ESC yaw moment를 만들고, coordinator가 이를 좌우 brake differential로 변환한다. 동시에 vertical controller는 roll-rate 기반 damping floor를 높여 LTR 증가를 억제한다. 그 결과 sideSlipMax는 baseline 30.4776 deg에서 2.1271 deg로 감소했고, LTR_max도 0.6808에서 0.3591로 감소하였다.
 
 ![B1 straight braking response](figures/b1_braking.png)
 *Figure 5.4 - B1 straight braking response. Straight brake boost와 ABS relief가 속도 감소 및 slip에 미친 영향을 확인한다.*
@@ -465,6 +507,8 @@ end
 ---
 
 ## 부록 B - 최종 코드 요약
+
+본 제출에서는 `sim_params.m`의 기본 gain 구조를 크게 바꾸기보다, `ctrl_lateral.m`, `ctrl_longitudinal.m`, `ctrl_vertical.m`, `ctrl_coordinator.m` 내부에서 gain scheduling, limiter, allocation logic을 구현하였다. 따라서 주요 변경사항은 `sim_params.m`의 상수 변경이 아니라 제어기 내부 scheduling table과 actuator authority 조정이다.
 
 ### ctrl_lateral.m
 
