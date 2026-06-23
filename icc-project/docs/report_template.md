@@ -281,7 +281,7 @@ deltaBrake = invW * A' * (yawMomentReq / (A * invW * A'));
 
 ## 5. 시뮬레이션 결과
 
-마지막으로 확인된 `grade_report.json` 기준 결과는 다음과 같다. 이후 코드 튜닝(v4.6)은 MATLAB 라이선스 문제로 본 환경에서 재실행하지 못했으므로, 최종 제출 전 `run('scripts/grade.m')`로 재생성해야 한다.
+마지막으로 확인된 `grade_report.json` 및 benchmark 출력 기준 결과는 다음과 같다.
 
 - 정량 점수: **51.2837 / 70**
 - 비율: **73.26%**
@@ -356,127 +356,7 @@ B1은 stoppingDistance가 baseline 대비 줄었지만 absSlipRMS는 목표보�
 
 ---
 
-## 6. 그림 생성 방법
-
-전체 시나리오 설명 그림은 다음 명령으로 생성할 수 있다.
-
-```matlab
-cd('/home/jjjeon/workspace/integrated-chassis-control/icc-project')
-init_project
-util_plot_scenario_diagrams('docs/figures/scenarios')
-```
-
-보고서에 들어가는 핵심 plot 네 개는 다음 코드로 한 번에 저장할 수 있다.
-
-```matlab
-cd('/home/jjjeon/workspace/integrated-chassis-control/icc-project')
-init_project
-
-outDir = 'docs/figures';
-if ~exist(outDir, 'dir')
-    mkdir(outDir);
-end
-
-% A1: trajectory comparison
-[a1_off, ~] = run_icc_scenario('A1','14dof','Controller','off','SavePlot',false);
-[a1_on,  ~] = run_icc_scenario('A1','14dof','Controller','on', 'SavePlot',false);
-
-fig = figure('Visible','off','Color','w');
-plot(a1_off.x_pos, a1_off.y_pos, 'r--', 'LineWidth', 1.2); hold on;
-plot(a1_on.x_pos,  a1_on.y_pos,  'b-',  'LineWidth', 1.5);
-plot(a1_on.scenario.refPath(:,1), a1_on.scenario.refPath(:,2), 'k:', 'LineWidth', 1.2);
-axis equal; grid on;
-xlabel('x [m]'); ylabel('y [m]');
-legend('Controller OFF','Controller ON','Reference path','Location','best');
-title('A1 trajectory comparison');
-saveas(fig, fullfile(outDir, 'a1_trajectory.png'));
-close(fig);
-
-% A1: yaw-rate response
-fig = figure('Visible','off','Color','w');
-plot(a1_on.t, rad2deg(a1_on.yawRateRef), 'k:', 'LineWidth', 1.2); hold on;
-plot(a1_off.t, rad2deg(a1_off.yawRate), 'r--', 'LineWidth', 1.2);
-plot(a1_on.t,  rad2deg(a1_on.yawRate),  'b-',  'LineWidth', 1.5);
-grid on;
-xlabel('time [s]'); ylabel('yaw rate [deg/s]');
-legend('Reference','Controller OFF','Controller ON','Location','best');
-title('A1 yaw-rate response');
-saveas(fig, fullfile(outDir, 'a1_yawrate.png'));
-close(fig);
-
-% A7: brake-in-turn response
-[a7_on, ~] = run_icc_scenario('A7','14dof','Controller','on','SavePlot',false);
-
-fig = figure('Visible','off','Color','w');
-subplot(3,1,1);
-plot(a7_on.t, rad2deg(a7_on.slipAngle), 'b-', 'LineWidth', 1.3);
-grid on; ylabel('side-slip [deg]');
-title('A7 brake-in-turn response');
-subplot(3,1,2);
-plot(a7_on.t, rad2deg(a7_on.yawRate), 'b-', 'LineWidth', 1.3);
-grid on; ylabel('yaw rate [deg/s]');
-subplot(3,1,3);
-plot(a7_on.t, a7_on.brakeTotal, 'b-', 'LineWidth', 1.3);
-grid on; xlabel('time [s]'); ylabel('total brake [Nm]');
-saveas(fig, fullfile(outDir, 'a7_response.png'));
-close(fig);
-
-% B1: straight braking response
-[b1_on, ~] = run_icc_scenario('B1','14dof','Controller','on','SavePlot',false);
-slipB1 = [b1_on.tire.FL.slipRatio, b1_on.tire.FR.slipRatio, ...
-          b1_on.tire.RL.slipRatio, b1_on.tire.RR.slipRatio];
-
-fig = figure('Visible','off','Color','w');
-subplot(3,1,1);
-plot(b1_on.t, b1_on.vx, 'b-', 'LineWidth', 1.3);
-grid on; ylabel('vx [m/s]');
-title('B1 straight braking response');
-subplot(3,1,2);
-plot(b1_on.t, abs(slipB1), 'LineWidth', 1.0);
-grid on; ylabel('|slip ratio|');
-subplot(3,1,3);
-plot(b1_on.t, b1_on.brakeTotal, 'b-', 'LineWidth', 1.3);
-grid on; xlabel('time [s]'); ylabel('total brake [Nm]');
-saveas(fig, fullfile(outDir, 'b1_braking.png'));
-close(fig);
-```
-
-전체 check trajectory를 추가로 저장하려면 다음 코드를 사용한다.
-
-```matlab
-outDir = 'docs/figures/check';
-if ~exist(outDir, 'dir')
-    mkdir(outDir);
-end
-
-scenarioList = {'A1','A3','A4','A7','B1','D1'};
-for i = 1:numel(scenarioList)
-    sid = scenarioList{i};
-    [result, kpi] = run_icc_scenario(sid, '14dof', ...
-        'Controller', 'on', 'SavePlot', false);
-
-    fig = figure('Visible','off','Color','w');
-    if isfield(result.scenario, 'refPath') && ~isempty(result.scenario.refPath)
-        plot(result.x_pos, result.y_pos, 'b-', 'LineWidth', 1.5); hold on;
-        plot(result.scenario.refPath(:,1), result.scenario.refPath(:,2), 'r--', 'LineWidth', 1.2);
-        legend('vehicle', 'refPath', 'Location', 'best');
-        xlabel('x [m]'); ylabel('y [m]');
-        axis equal; grid on;
-        title([sid ' trajectory']);
-    else
-        subplot(3,1,1); plot(result.t, result.vx, 'b-'); grid on; ylabel('vx [m/s]');
-        subplot(3,1,2); plot(result.t, rad2deg(result.yawRate), 'b-'); grid on; ylabel('yawRate [deg/s]');
-        subplot(3,1,3); plot(result.t, rad2deg(result.slipAngle), 'b-'); grid on; ylabel('sideSlip [deg]');
-        xlabel('time [s]');
-    end
-    saveas(fig, fullfile(outDir, [sid '_check.png']));
-    close(fig);
-end
-```
-
----
-
-## 7. 한계와 개선 방향
+## 6. 한계와 개선 방향
 
 1. **A1/D1 lateralDevMax 한계**
    yaw-rate와 side-slip만으로는 path deviation을 직접 줄이는 데 한계가 있다. path error feedback을 추가했지만, 강하게 넣을 경우 LTR이 증가하였다. 향후에는 preview-based lateral controller 또는 MPC/LQR path tracking layer가 필요하다.
@@ -492,7 +372,7 @@ end
 
 ---
 
-## 8. 참고문헌
+## 7. 참고문헌
 
 [1] ISO 3888-1:2018, *Passenger cars - Test track for a severe lane-change manoeuvre*.
 [2] ISO 4138:2021, *Passenger cars - Steady-state circular driving behaviour*.
