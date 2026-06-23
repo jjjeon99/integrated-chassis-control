@@ -58,6 +58,10 @@ function [forceCmd, ctrlState] = ctrl_longitudinal(vxRef, vx, ax, ctrlState, CTR
         ctrlState.prevBrakeAssistRatio = zeros(4, 1);
     end
     ctrlState.prevBrakeAssistRatio = local_safe_vec4(ctrlState.prevBrakeAssistRatio, 0);
+    if ~isfield(ctrlState, 'absValveMode')
+        ctrlState.absValveMode = zeros(4, 1);
+    end
+    ctrlState.absValveMode = local_safe_vec4(ctrlState.absValveMode, 0);
     if ~isfield(ctrlState, 'wheelSlip')
         ctrlState.wheelSlip = zeros(4, 1);
     end
@@ -155,28 +159,48 @@ function [forceCmd, ctrlState] = ctrl_longitudinal(vxRef, vx, ax, ctrlState, CTR
     peakBrakeSlip = max(brakeSlip);
     if hardBrakeActive
         slipTarget = 0.13;
+        slipLow = 0.10;
+        slipHigh = 0.15;
         prevAbsCmd = local_safe_vec4(ctrlState.prevBrakeAssistRatio, 0);
         wheelAssistTarget = zeros(4, 1);
+        valveMode = zeros(4, 1);
 
-        % Continuous ABS relief proportional to slip error. The command is
-        % sent directly to the coordinator, which subtracts it from the
-        % scenario brake torque in straight braking. When slip recovers,
-        % ramp pressure back in from the previous relief instead of jumping
-        % to zero and re-locking the tire.
-        slipError = brakeSlip - slipTarget;
-        releaseMask = slipError > 0;
-        wheelAssistTarget(releaseMask) = -20.0 * slipError(releaseMask);
-        wheelAssistTarget(~releaseMask) = min(0.0, prevAbsCmd(~releaseMask) + 1.5 * dt);
+        % Three-mode hydraulic ABS state:
+        %   +1 decrease: over-slip, open relief quickly
+        %    0 hold    : near target, keep the current valve state
+        %   -1 increase: under-slip, slowly restore pressure
+        % This keeps the output continuous instead of toggling directly
+        % between full release and driver pressure.
+        releaseRate = 32.0;
+        recoverRate = 1.2;
+        holdBleedRate = 0.15;
+        for i = 1:4
+            if brakeSlip(i) > slipHigh
+                slipError = brakeSlip(i) - slipTarget;
+                propRelease = -18.0 * slipError;
+                rateRelease = prevAbsCmd(i) - releaseRate * dt;
+                wheelAssistTarget(i) = min(propRelease, rateRelease);
+                valveMode(i) = 1;
+            elseif brakeSlip(i) < slipLow
+                wheelAssistTarget(i) = prevAbsCmd(i) + recoverRate * dt;
+                valveMode(i) = -1;
+            else
+                wheelAssistTarget(i) = prevAbsCmd(i) + holdBleedRate * dt;
+                valveMode(i) = 0;
+            end
+        end
         wheelAssistTarget = local_sat(wheelAssistTarget, -1.0, 0.0);
 
         % If all cached slips are still unavailable/zero at brake onset,
         % apply a short conservative push so the controller visibly engages.
         if peakBrakeSlip < 1e-4
             wheelAssistTarget = zeros(4, 1);
+            valveMode = zeros(4, 1);
         end
 
     else
         wheelAssistTarget = zeros(4, 1);
+        valveMode = zeros(4, 1);
     end
     forceCmd.brakeAssistWheelRatio = local_sat(wheelAssistTarget, -1.0, 0.0);
     forceCmd.brakeAssistRatio = local_sat(mean(forceCmd.brakeAssistWheelRatio), -1.0, 0.0);
@@ -186,6 +210,7 @@ function [forceCmd, ctrlState] = ctrl_longitudinal(vxRef, vx, ax, ctrlState, CTR
     ctrlState.absScale = absScale;
     ctrlState.brakeAssistRatio = forceCmd.brakeAssistRatio;
     ctrlState.prevBrakeAssistRatio = forceCmd.brakeAssistWheelRatio;
+    ctrlState.absValveMode = valveMode;
     ctrlState.hardBrakeActive = hardBrakeActive;
     ctrlState.meanBrakeSlip = meanBrakeSlip;
     ctrlState.peakBrakeSlip = peakBrakeSlip;

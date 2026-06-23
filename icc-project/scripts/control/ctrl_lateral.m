@@ -1,4 +1,4 @@
-function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx, ctrlState, CTRL, LIM, dt)
+function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx, ctrlState, CTRL, LIM, dt, pathInfo)
 %CTRL_LATERAL [학생 작성] 횡방향 통합 제어기 (AFS + ESC)
 %
 %   yaw rate 추종 (AFS) + slip angle 제한 (ESC) 통합 제어기를 설계하라.
@@ -12,6 +12,7 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
 %       CTRL       - sim_params.m 에서 정의된 게인 (.LAT.Kp, .Ki, .Kd, .intMax)
 %       LIM        - 한계값 (.MAX_STEER_ANGLE, .MAX_SLIP_ANGLE)
 %       dt         - sample time [s]
+%       pathInfo   - optional struct(.hasPath, .lateralDev, .headingError)
 %
 %   Outputs:
 %       deltaAdd.steerAngle - AFS 보조 조향각 [rad], 부호 driver delta 와 동일 방향
@@ -30,6 +31,9 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
     end
     if nargin < 5 || ~isstruct(ctrlState)
         ctrlState = struct();
+    end
+    if nargin < 9 || ~isstruct(pathInfo)
+        pathInfo = struct();
     end
 
     yawRateRef = local_safe_scalar(yawRateRef, 0);
@@ -59,9 +63,16 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
     vxAbs = abs(vx);
     vxEff = max(vxAbs, 0.5);
     speedBlend = local_sat((vxAbs - 0.5) / 2.5, 0, 1);
-    speedAtten = local_sat((vxAbs - 5.0) / 20.0, 0, 1);
-    kpSched = 1.0 - 0.1 * speedAtten;
-    kiSched = 1.0 - 0.9 * speedAtten;
+    brakeLikeSlip = local_sat(abs(slipAngle) / deg2rad(6), 0, 1);
+
+    % Table-based gain scheduling: high-speed maneuvers keep enough P
+    % authority for path response, while I action is nearly removed to
+    % avoid phase-lag fishtailing in A3/A1/D1.
+    speedGrid = [0, 5, 15, 25, 35];
+    kpGrid = [1.05, 1.00, 0.96, 0.90, 0.88];
+    kiGrid = [1.00, 0.85, 0.32, 0.10, 0.06];
+    kpSched = local_interp1_clamped(speedGrid, kpGrid, vxAbs);
+    kiSched = local_interp1_clamped(speedGrid, kiGrid, vxAbs) * (1.0 - 0.35 * brakeLikeSlip);
 
     yawRateRefLimit = min(yawRateHardLimit, ayHardLimit / vxEff);
     yawRateRefSafe = local_sat(yawRateRef, -yawRateRefLimit, yawRateRefLimit);
@@ -101,6 +112,26 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
         steerUnsat = 0.50 * steerUnsat;
     end
 
+    %% Path-error feedback for DLC / path-following scenarios
+    % Yaw-rate tracking keeps heading dynamics stable, but A1/D1 also score
+    % geometric path deviation. Use a small cross-track correction only when
+    % the scenario provides a reference path.
+    hasPath = local_get_nested(pathInfo, {'hasPath'}, false);
+    lateralDev = local_get_nested(pathInfo, {'lateralDev'}, 0);
+    headingErr = local_get_nested(pathInfo, {'headingError'}, 0);
+    if hasPath && isfinite(lateralDev) && isfinite(headingErr) && vxAbs > 5.0
+        pathBlend = local_sat((vxAbs - 5.0) / 10.0, 0, 1);
+        latErrCtrl = local_sat(-lateralDev, -2.0, 2.0);
+        headingCtrl = local_sat(headingErr, -deg2rad(12), deg2rad(12));
+        pathSteer = pathBlend * (0.045 * latErrCtrl + 0.10 * headingCtrl);
+        pathSteer = local_sat(pathSteer, -deg2rad(2.2), deg2rad(2.2));
+
+        % If the body is already slipping, protect A4/A7-like stability by
+        % fading the geometric correction rather than adding more tire slip.
+        slipFade = 1.0 - local_sat((abs(slipAngle) - deg2rad(2.0)) / deg2rad(3.0), 0, 0.75);
+        steerUnsat = steerUnsat + slipFade * pathSteer;
+    end
+
     deltaAdd.steerAngle = local_sat(steerUnsat, -steerAssistLimit, steerAssistLimit);
 
     %% ESC: slip-angle limiter + light yaw-rate support
@@ -138,6 +169,7 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
     deltaAdd.yawRateRef = yawRateRef;
     deltaAdd.measuredYawRate = yawRate;
     deltaAdd.measuredSlipAngle = slipAngle;
+    deltaAdd.lateralDev = local_get_nested(pathInfo, {'lateralDev'}, 0);
 
 end
 
@@ -167,4 +199,24 @@ end
 
 function y = local_sat(x, lower, upper)
     y = min(max(x, lower), upper);
+end
+
+function y = local_interp1_clamped(xGrid, yGrid, x)
+    if x <= xGrid(1)
+        y = yGrid(1);
+        return;
+    end
+    if x >= xGrid(end)
+        y = yGrid(end);
+        return;
+    end
+    idx = find(xGrid <= x, 1, 'last');
+    idx = min(idx, numel(xGrid) - 1);
+    dx = xGrid(idx+1) - xGrid(idx);
+    if dx <= 0
+        y = yGrid(idx);
+        return;
+    end
+    a = (x - xGrid(idx)) / dx;
+    y = (1 - a) * yGrid(idx) + a * yGrid(idx+1);
 end

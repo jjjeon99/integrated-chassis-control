@@ -91,10 +91,11 @@ function [result, kpi] = run_icc_scenario(scenarioId, plantModel, varargin)
 
         % ----- 3. ICC controllers -----
         yawRateRef = calc_ref_yaw_rate(vx_now, delta_driver, VEH);
+        pathInfo = local_path_error_info(scenario, pose);
         if ctrlOn
             % (a) ctrl_lateral
             [latCmd, ctrlState_lat] = ctrl_lateral(yawRateRef, yawRate_now, beta_now, ...
-                                                  vx_now, ctrlState_lat, CTRL, LIM, dt);
+                                                  vx_now, ctrlState_lat, CTRL, LIM, dt, pathInfo);
 
             % (b) ctrl_longitudinal — [FIX] ABS 활성화
             if k > 1
@@ -331,4 +332,57 @@ function LTR = local_calcLTR_max(result, ~)
     else
         LTR = NaN;
     end
+end
+
+function pathInfo = local_path_error_info(scenario, pose)
+% Signed path error for controller feedback. Positive lateralDev means the
+% vehicle is left of the local path tangent; ctrl_lateral applies the
+% steering sign convention used by the driver/controller stack.
+    pathInfo = struct('hasPath', false, 'lateralDev', 0, 'headingError', 0);
+    if ~isfield(scenario, 'refPath') || isempty(scenario.refPath) || ...
+       ~isstruct(pose) || ~isfield(pose, 'x') || ~isfield(pose, 'y') || ~isfield(pose, 'psi')
+        return;
+    end
+
+    refPath = scenario.refPath;
+    if size(refPath, 1) < 2 || size(refPath, 2) < 2
+        return;
+    end
+
+    px = pose.x;
+    py = pose.y;
+    bestD2 = inf;
+    bestLat = 0;
+    bestPsi = 0;
+
+    for i = 1:(size(refPath, 1) - 1)
+        p0 = refPath(i, 1:2);
+        p1 = refPath(i+1, 1:2);
+        seg = p1 - p0;
+        segLen2 = seg(1)^2 + seg(2)^2;
+        if segLen2 < 1e-9
+            continue;
+        end
+
+        rel = [px - p0(1), py - p0(2)];
+        u = min(max((rel * seg') / segLen2, 0), 1);
+        proj = p0 + u * seg;
+        err = [px - proj(1), py - proj(2)];
+        d2 = err(1)^2 + err(2)^2;
+        if d2 < bestD2
+            bestD2 = d2;
+            bestPsi = atan2(seg(2), seg(1));
+            bestLat = -sin(bestPsi) * err(1) + cos(bestPsi) * err(2);
+        end
+    end
+
+    if isfinite(bestD2)
+        pathInfo.hasPath = true;
+        pathInfo.lateralDev = bestLat;
+        pathInfo.headingError = local_wrap_to_pi(bestPsi - pose.psi);
+    end
+end
+
+function a = local_wrap_to_pi(a)
+    a = mod(a + pi, 2*pi) - pi;
 end

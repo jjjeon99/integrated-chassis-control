@@ -77,8 +77,6 @@ function actuatorCmd = ctrl_coordinator(latCmd, lonCmd, verCmd, vx, VEH, CTRL, L
 
     %% ESC yaw-moment allocation via differential braking
     yawBlend = local_sat((abs(vx) - 1.0) / 4.0, 0, 1);
-    ratioFront = 0.60;
-
     % 직진 제동 보조 상태가 아닐 때만 요모멘트 분배 활성화
     if isStraightBrake
         localYawMomentReq = 0;
@@ -86,13 +84,8 @@ function actuatorCmd = ctrl_coordinator(latCmd, lonCmd, verCmd, vx, VEH, CTRL, L
         localYawMomentReq = yawBlend * yawMomentReq;
     end
 
-    diffFront = -2 * (ratioFront * localYawMomentReq) * rw / trackF;       % T_R - T_L
-    diffRear  = -2 * ((1 - ratioFront) * localYawMomentReq) * rw / trackR; % T_R - T_L
-
-    frontPair = local_apply_yaw_pair(baseBrake(1), baseBrake(2), diffFront, maxBrakeTrq);
-    rearPair  = local_apply_yaw_pair(baseBrake(3), baseBrake(4), diffRear,  maxBrakeTrq);
-
-    actuatorCmd.brakeTorque = [frontPair; rearPair];
+    yawBrakeDelta = local_wls_yaw_allocation(localYawMomentReq, baseBrake, rw, trackF, trackR, maxBrakeTrq);
+    actuatorCmd.brakeTorque = baseBrake + yawBrakeDelta;
     if isStraightBrake
         actuatorCmd.brakeTorque = local_sat(actuatorCmd.brakeTorque, -0.85 * maxBrakeTrq, maxBrakeTrq);
     else
@@ -102,6 +95,38 @@ function actuatorCmd = ctrl_coordinator(latCmd, lonCmd, verCmd, vx, VEH, CTRL, L
 end
 
 %% ------------------------------------------------------------------------
+function deltaBrake = local_wls_yaw_allocation(yawMomentReq, baseBrake, rw, trackF, trackR, maxBrakeTrq)
+    deltaBrake = zeros(4, 1);
+    if ~isfinite(yawMomentReq) || abs(yawMomentReq) < 1e-9
+        return;
+    end
+
+    % A*dT approximates generated yaw moment. Positive yaw moment follows
+    % the existing sign convention: more left-side brake torque yields
+    % positive yaw.
+    A = [trackF/(2*rw), -trackF/(2*rw), trackR/(2*rw), -trackR/(2*rw)];
+
+    % Weighted least-squares effort: prefer front axle for ESC authority but
+    % keep rear participation available when front brakes are saturated.
+    headroom = max(maxBrakeTrq - baseBrake(:), 1);
+    reliefRoom = max(baseBrake(:), 1);
+    weight = [1.0; 1.0; 1.35; 1.35] .* (1.0 + 0.25 ./ max(headroom / maxBrakeTrq, 0.05));
+    invW = diag(1 ./ max(weight, 1e-3));
+
+    denom = A * invW * A';
+    if denom < 1e-9 || ~isfinite(denom)
+        return;
+    end
+
+    deltaBrake = invW * A' * (yawMomentReq / denom);
+
+    % Keep the correction feasible before the final global saturation so the
+    % allocator does not silently lose all yaw authority at one wheel.
+    lower = -0.65 * reliefRoom;
+    upper = 0.65 * headroom;
+    deltaBrake = local_sat(deltaBrake, lower, upper);
+end
+
 function pair = local_apply_yaw_pair(leftBase, rightBase, diffReq, maxBrakeTrq)
     pair = [leftBase; rightBase];
     if ~isfinite(diffReq) || abs(diffReq) < 1e-9
