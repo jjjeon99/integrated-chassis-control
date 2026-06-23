@@ -119,17 +119,19 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
     hasPath = local_get_nested(pathInfo, {'hasPath'}, false);
     lateralDev = local_get_nested(pathInfo, {'lateralDev'}, 0);
     headingErr = local_get_nested(pathInfo, {'headingError'}, 0);
+    pathYawAssist = 0;
     if hasPath && isfinite(lateralDev) && isfinite(headingErr) && vxAbs > 5.0
         pathBlend = local_sat((vxAbs - 5.0) / 10.0, 0, 1);
         latErrCtrl = local_sat(-lateralDev, -2.0, 2.0);
         headingCtrl = local_sat(headingErr, -deg2rad(12), deg2rad(12));
-        pathSteer = pathBlend * (0.045 * latErrCtrl + 0.10 * headingCtrl);
-        pathSteer = local_sat(pathSteer, -deg2rad(2.2), deg2rad(2.2));
+        pathSteer = pathBlend * (0.075 * latErrCtrl + 0.12 * headingCtrl);
+        pathSteer = local_sat(pathSteer, -deg2rad(4.0), deg2rad(4.0));
 
         % If the body is already slipping, protect A4/A7-like stability by
         % fading the geometric correction rather than adding more tire slip.
         slipFade = 1.0 - local_sat((abs(slipAngle) - deg2rad(2.0)) / deg2rad(3.0), 0, 0.75);
         steerUnsat = steerUnsat + slipFade * pathSteer;
+        pathYawAssist = slipFade * pathBlend * local_sat(0.40 * latErrCtrl + 0.30 * headingCtrl / deg2rad(8), -1, 1);
     end
 
     deltaAdd.steerAngle = local_sat(steerUnsat, -steerAssistLimit, steerAssistLimit);
@@ -147,14 +149,15 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
 
     mzTrack = speedBlend * 0.35 * yawMomentLimit * local_sat(yawNorm, -1, 1);
     mzSlip  = speedBlend * yawMomentLimit * local_sat(betaNorm, -1, 1);
+    mzPath  = speedBlend * 0.18 * yawMomentLimit * pathYawAssist;
 
     if betaExcess > 0
-        yawMomentCmd = mzTrack + mzSlip;
+        yawMomentCmd = mzTrack + mzSlip + 0.30 * mzPath;
     else
         if abs(yawNorm) > 0.25
-            yawMomentCmd = 0.85 * mzTrack;
+            yawMomentCmd = 0.85 * mzTrack + mzPath;
         else
-            yawMomentCmd = 0;
+            yawMomentCmd = mzPath;
         end
     end
 
