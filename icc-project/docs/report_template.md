@@ -285,12 +285,8 @@ deltaBrake = invW * A' * (yawMomentReq / (A * invW * A'));
 
 - 정량 점수: **51.2837 / 70**
 - 비율: **73.26%**
-- 런타임 에러: 없음
-- 감점: 없음
 
 ### 5.1 KPI 요약
-
-먼저 benchmark 관점의 OFF/ON 비교는 다음과 같다. OFF/ON 값은 `run_icc_benchmark.m` 출력(`benchmark_P1_20260623_233234.mat`) 기준이다.
 
 | 시나리오 | KPI | OFF | ON | delta% |
 |---|---:|---:|---:|---:|
@@ -383,8 +379,7 @@ B1은 stoppingDistance가 baseline 대비 줄었지만 absSlipRMS는 목표보�
 ---
 
 ## 부록 A - 사용한 AI 도구
-
-`student_info.m`의 `ai_usage` 항목과 일치하게 Codex를 사용하였다. Codex는 제어기 구조 정리, MATLAB 코드 수정, gain tuning 후보 제안, 보고서 초안 작성에 사용되었다. 최종 설계 판단은 `grade_report.json`과 시나리오별 trajectory를 확인하며 조정하였다.
+Codex는 제어기 구조 정리, MATLAB 코드 수정, gain tuning 후보 제안, 보고서 초안 작성에 사용되었다. 최종 설계 판단은 `grade_report.json`과 시나리오별 trajectory를 확인하며 조정하였다.
 
 ---
 
