@@ -171,13 +171,13 @@ function [forceCmd, ctrlState] = ctrl_longitudinal(vxRef, vx, ax, ctrlState, CTR
         %   -1 increase: under-slip, slowly restore pressure
         % This keeps the output continuous instead of toggling directly
         % between full release and driver pressure.
-        releaseRate = 12.0;
-        recoverRate = 1.8;
-        holdBleedRate = 0.30;
+        releaseRate = 5.0;
+        recoverRate = 3.0;
+        holdBleedRate = 0.60;
         for i = 1:4
             if brakeSlip(i) > slipHigh
                 slipError = brakeSlip(i) - slipTarget;
-                propRelease = -9.0 * slipError;
+                propRelease = -4.0 * slipError;
                 rateRelease = prevAbsCmd(i) - releaseRate * dt;
                 wheelAssistTarget(i) = min(propRelease, rateRelease);
                 valveMode(i) = 1;
@@ -189,7 +189,7 @@ function [forceCmd, ctrlState] = ctrl_longitudinal(vxRef, vx, ax, ctrlState, CTR
                 valveMode(i) = 0;
             end
         end
-        wheelAssistTarget = local_sat(wheelAssistTarget, -0.55, 0.0);
+        wheelAssistTarget = local_sat(wheelAssistTarget, -0.25, 0.0);
 
         % If all cached slips are still unavailable/zero at brake onset,
         % apply a short conservative push so the controller visibly engages.
@@ -202,7 +202,7 @@ function [forceCmd, ctrlState] = ctrl_longitudinal(vxRef, vx, ax, ctrlState, CTR
         wheelAssistTarget = zeros(4, 1);
         valveMode = zeros(4, 1);
     end
-    forceCmd.brakeAssistWheelRatio = local_sat(wheelAssistTarget, -0.55, 0.0);
+    forceCmd.brakeAssistWheelRatio = local_sat(wheelAssistTarget, -0.25, 0.0);
     forceCmd.brakeAssistRatio = local_sat(mean(forceCmd.brakeAssistWheelRatio), -1.0, 0.0);
 
     ctrlState.prevForce = forceCmd.Fx_total;

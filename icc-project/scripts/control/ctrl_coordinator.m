@@ -55,7 +55,7 @@ function actuatorCmd = ctrl_coordinator(latCmd, lonCmd, verCmd, vx, VEH, CTRL, L
                       (brakeRatio > 0.5 || max(abs(brakeAssistWheelRatio)) > 0);
 
     if isStraightBrake
-        brakeBoostGain = 1.18;
+        brakeBoostGain = 1.24;
         baseBrake = baseBrake * brakeBoostGain;
     end
 

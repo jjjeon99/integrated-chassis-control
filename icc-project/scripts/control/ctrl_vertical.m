@@ -96,8 +96,8 @@ function [dampingCmd, ctrlState] = ctrl_vertical(suspState, ctrlState, CTRL, dt)
         % Fast anti-roll override for lane-change transients. Skyhook may
         % fall back to cMin exactly when roll rate is building, so enforce
         % a higher damping floor instead of adding a tiny correction.
-        rollSupport = local_sat(abs(rollVel) / 0.12, 0, 1);
-        rollFloor = cMin + 0.62 * (cMax - cMin) * rollSupport;
+        rollSupport = local_sat(abs(rollVel) / 0.10, 0, 1);
+        rollFloor = cMin + 0.75 * (cMax - cMin) * rollSupport;
         cCmd = max(cCmd, rollFloor);
 
         % If the sprung corner is actively contributing to roll motion,
@@ -108,7 +108,7 @@ function [dampingCmd, ctrlState] = ctrl_vertical(suspState, ctrlState, CTRL, dt)
         end
         cornerRollVel = 0.5 * sideSign * rollVel;
         if zsDot(i) * cornerRollVel > 0
-            cCmd = cCmd + 0.28 * (cMax - cMin) * rollSupport;
+            cCmd = cCmd + 0.35 * (cMax - cMin) * rollSupport;
         end
 
         dampingCmd(i) = local_sat(cCmd, cMin, cMax);

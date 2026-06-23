@@ -91,7 +91,7 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
     intCandidate = local_sat(ctrlState.intError + yawErr * dt, -intEffMax, intEffMax);
     wheelbaseFF = 2.7;
     if vxAbs > 5.0
-        steerFF = 0.92 * wheelbaseFF * yawRateRefSafe / max(vxAbs, 1.0);
+        steerFF = 0.75 * wheelbaseFF * yawRateRefSafe / max(vxAbs, 1.0);
     else
         steerFF = 0;
     end
@@ -124,14 +124,14 @@ function [deltaAdd, ctrlState] = ctrl_lateral(yawRateRef, yawRate, slipAngle, vx
         pathBlend = local_sat((vxAbs - 5.0) / 10.0, 0, 1);
         latErrCtrl = local_sat(lateralDev, -2.0, 2.0);
         headingCtrl = local_sat(headingErr, -deg2rad(12), deg2rad(12));
-        pathSteer = pathBlend * (0.040 * latErrCtrl + 0.08 * headingCtrl);
-        pathSteer = local_sat(pathSteer, -deg2rad(1.8), deg2rad(1.8));
+        pathSteer = pathBlend * (0.012 * latErrCtrl + 0.03 * headingCtrl);
+        pathSteer = local_sat(pathSteer, -deg2rad(0.5), deg2rad(0.5));
 
         % If the body is already slipping, protect A4/A7-like stability by
         % fading the geometric correction rather than adding more tire slip.
         slipFade = 1.0 - local_sat((abs(slipAngle) - deg2rad(2.0)) / deg2rad(3.0), 0, 0.75);
         steerUnsat = steerUnsat + slipFade * pathSteer;
-        pathYawAssist = slipFade * pathBlend * local_sat(0.10 * latErrCtrl + 0.08 * headingCtrl / deg2rad(8), -1, 1);
+        pathYawAssist = 0;
     end
 
     deltaAdd.steerAngle = local_sat(steerUnsat, -steerAssistLimit, steerAssistLimit);
