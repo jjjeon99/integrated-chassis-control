@@ -286,7 +286,23 @@ deltaBrake = invW * A' * (yawMomentReq / (A * invW * A'));
 | D1 | LTR_max | 0.7933 | 0.6000 | 1.36 / 2 |
 | D1 | lateralDevMax | 1.8599 | 1.0000 | 0.00 / 2 |
 
-### 5.2 결과 해석
+### 5.2 핵심 Plot
+
+아래 네 그림은 제어기 성능을 설명하기 위해 사용한다. A1은 path tracking 한계와 yaw-rate tracking 특성을 보여주고, A7은 가장 성공적인 안정화 사례, B1은 straight braking 성능을 보여준다.
+
+![A1 trajectory comparison](figures/a1_trajectory.png)
+*Figure 5.1 - A1 ISO 3888-1 DLC trajectory. Controller on/off 궤적과 reference path를 비교한다.*
+
+![A1 yaw rate response](figures/a1_yawrate.png)
+*Figure 5.2 - A1 yaw-rate response. Gain-scheduled AFS가 yaw-rate tracking에 미친 영향을 확인한다.*
+
+![A7 brake-in-turn response](figures/a7_response.png)
+*Figure 5.3 - A7 brake-in-turn response. ESC yaw moment와 CDC anti-roll damping이 side-slip을 억제한 사례이다.*
+
+![B1 straight braking response](figures/b1_braking.png)
+*Figure 5.4 - B1 straight braking response. Straight brake boost와 ABS relief가 속도 감소 및 slip에 미친 영향을 확인한다.*
+
+### 5.3 결과 해석
 
 A7과 A4는 가장 안정적으로 통과하였다. A7에서는 brake-in-turn 중 baseline의 큰 side-slip을 ESC yaw moment와 CDC anti-roll damping이 억제하였다. A4는 steady circular 조건에서 과도한 AFS 개입을 제한했기 때문에 side-slip과 understeer gradient가 안정적으로 유지되었다.
 
@@ -306,7 +322,82 @@ init_project
 util_plot_scenario_diagrams('docs/figures/scenarios')
 ```
 
-단일 또는 전체 check trajectory는 다음 방식으로 저장할 수 있다.
+보고서에 들어가는 핵심 plot 네 개는 다음 코드로 한 번에 저장할 수 있다.
+
+```matlab
+cd('/home/jjjeon/workspace/integrated-chassis-control/icc-project')
+init_project
+
+outDir = 'docs/figures';
+if ~exist(outDir, 'dir')
+    mkdir(outDir);
+end
+
+% A1: trajectory comparison
+[a1_off, ~] = run_icc_scenario('A1','14dof','Controller','off','SavePlot',false);
+[a1_on,  ~] = run_icc_scenario('A1','14dof','Controller','on', 'SavePlot',false);
+
+fig = figure('Visible','off','Color','w');
+plot(a1_off.x_pos, a1_off.y_pos, 'r--', 'LineWidth', 1.2); hold on;
+plot(a1_on.x_pos,  a1_on.y_pos,  'b-',  'LineWidth', 1.5);
+plot(a1_on.scenario.refPath(:,1), a1_on.scenario.refPath(:,2), 'k:', 'LineWidth', 1.2);
+axis equal; grid on;
+xlabel('x [m]'); ylabel('y [m]');
+legend('Controller OFF','Controller ON','Reference path','Location','best');
+title('A1 trajectory comparison');
+saveas(fig, fullfile(outDir, 'a1_trajectory.png'));
+close(fig);
+
+% A1: yaw-rate response
+fig = figure('Visible','off','Color','w');
+plot(a1_on.t, rad2deg(a1_on.yawRateRef), 'k:', 'LineWidth', 1.2); hold on;
+plot(a1_off.t, rad2deg(a1_off.yawRate), 'r--', 'LineWidth', 1.2);
+plot(a1_on.t,  rad2deg(a1_on.yawRate),  'b-',  'LineWidth', 1.5);
+grid on;
+xlabel('time [s]'); ylabel('yaw rate [deg/s]');
+legend('Reference','Controller OFF','Controller ON','Location','best');
+title('A1 yaw-rate response');
+saveas(fig, fullfile(outDir, 'a1_yawrate.png'));
+close(fig);
+
+% A7: brake-in-turn response
+[a7_on, ~] = run_icc_scenario('A7','14dof','Controller','on','SavePlot',false);
+
+fig = figure('Visible','off','Color','w');
+subplot(3,1,1);
+plot(a7_on.t, rad2deg(a7_on.slipAngle), 'b-', 'LineWidth', 1.3);
+grid on; ylabel('side-slip [deg]');
+title('A7 brake-in-turn response');
+subplot(3,1,2);
+plot(a7_on.t, rad2deg(a7_on.yawRate), 'b-', 'LineWidth', 1.3);
+grid on; ylabel('yaw rate [deg/s]');
+subplot(3,1,3);
+plot(a7_on.t, a7_on.brakeTotal, 'b-', 'LineWidth', 1.3);
+grid on; xlabel('time [s]'); ylabel('total brake [Nm]');
+saveas(fig, fullfile(outDir, 'a7_response.png'));
+close(fig);
+
+% B1: straight braking response
+[b1_on, ~] = run_icc_scenario('B1','14dof','Controller','on','SavePlot',false);
+slipB1 = [b1_on.tire.FL.slipRatio, b1_on.tire.FR.slipRatio, ...
+          b1_on.tire.RL.slipRatio, b1_on.tire.RR.slipRatio];
+
+fig = figure('Visible','off','Color','w');
+subplot(3,1,1);
+plot(b1_on.t, b1_on.vx, 'b-', 'LineWidth', 1.3);
+grid on; ylabel('vx [m/s]');
+title('B1 straight braking response');
+subplot(3,1,2);
+plot(b1_on.t, abs(slipB1), 'LineWidth', 1.0);
+grid on; ylabel('|slip ratio|');
+subplot(3,1,3);
+plot(b1_on.t, b1_on.brakeTotal, 'b-', 'LineWidth', 1.3);
+grid on; xlabel('time [s]'); ylabel('total brake [Nm]');
+saveas(fig, fullfile(outDir, 'b1_braking.png'));
+close(fig);
+```
+
+전체 check trajectory를 추가로 저장하려면 다음 코드를 사용한다.
 
 ```matlab
 outDir = 'docs/figures/check';
@@ -337,12 +428,6 @@ for i = 1:numel(scenarioList)
     saveas(fig, fullfile(outDir, [sid '_check.png']));
     close(fig);
 end
-```
-
-보고서에는 다음과 같이 삽입한다.
-
-```markdown
-![A1 check](figures/check/A1_check.png)
 ```
 
 ---
